@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
-import { Mic, Square, ArrowLeft, Play, Pause } from "lucide-react-native";
+import { Mic, Square, ArrowLeft, Play, Pause, RefreshCcw } from "lucide-react-native";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
@@ -27,6 +27,7 @@ type RecordingState = "idle" | "recording" | "recorded";
 const COLORS = {
   bg: "#0B0B0F",
   card: "#15151C",
+  bgLight: "#1E1E27",
   textPrimary: "#FFFFFF",
   textSecondary: "#A0A0AA",
   primary: "#6D5EF5",
@@ -166,18 +167,6 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         setRecordingDuration((prev) => prev + 0.1);
       }, 100);
 
-      // Start waveform animation
-      const animateWaveform = () => {
-        setWaveformAmplitudes((prev) => {
-          const next = prev.length >= 40 ? prev.slice(1) : [...prev];
-          next.push(Math.random() * 0.5 + 0.3);
-          return next;
-        });
-        animationRef.current = requestAnimationFrame(animateWaveform);
-      };
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-      animateWaveform();
-
       // Start audio recording with custom high-quality settings
       const { recording } = await Audio.Recording.createAsync({
         isMeteringEnabled: true,
@@ -206,6 +195,37 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         },
       });
       recordingRef.current = recording;
+
+      // Start waveform animation with REAL audio levels
+      const updateWaveform = async () => {
+        if (recordingRef.current) {
+          try {
+            const status = await recordingRef.current.getStatusAsync();
+            if (status.isRecording && status.metering !== undefined) {
+              // metering is in decibels (typically -160 to 0)
+              // Normalize to 0-1 range for display
+              const db = status.metering;
+              const normalizedLevel = Math.max(0, Math.min(1, (db + 60) / 60));
+              
+              setWaveformAmplitudes((prev) => {
+                const next = prev.length >= 40 ? prev.slice(1) : [...prev];
+                // Add some smoothing and minimum height
+                const smoothedLevel = normalizedLevel * 0.5 + 0.1;
+                next.push(smoothedLevel);
+                return next;
+              });
+              
+              // Continue animation while recording
+              animationRef.current = requestAnimationFrame(updateWaveform);
+            }
+          } catch (e) {
+            // Recording might have stopped, that's ok
+          }
+        }
+      };
+      
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      updateWaveform();
     } catch (err) {
       console.error("Failed to start recording", err);
       Alert.alert("Error", "Failed to start recording. Please check permissions.");
@@ -423,8 +443,8 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
     recordingState === "idle"
       ? "Record a 3-5 second sample of the sound you want to detect"
       : recordingState === "recording"
-      ? "Make the sound you want to teach"
-      : "Audio is stored locally for pattern matching";
+      ? "Play the chime you want to record"
+      : "Audio is stored for recognition";
 
   const circleColor =
     recordingState === "idle"
@@ -440,7 +460,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         <Pressable onPress={onClose} style={styles.backBtn} hitSlop={10}>
           <ArrowLeft size={24} color={COLORS.textPrimary} />
         </Pressable>
-        <Text style={styles.headerTitle}>Teach a new sound</Text>
+        <Text style={styles.headerTitle}>Record a chime</Text>
       </View>
 
       {/* Recording Card */}
@@ -458,17 +478,44 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
               </Pressable>
             </Animated.View>
           ) : (
-            <Pressable onPress={togglePlayback} style={[styles.bigCircle, { backgroundColor: circleColor }]}>
-              {isPlaying ? <Pause size={40} color="white" /> : <Play size={40} color="white" />}
-            </Pressable>
+            <View style={styles.playbackControls}>
+              <Pressable onPress={togglePlayback} style={[styles.bigCircle, { backgroundColor: circleColor }]}>
+                {isPlaying ? <Pause size={40} color="white" /> : <Play size={40} color="white" />}
+              </Pressable>
+              
+              <Pressable 
+                onPress={() => {
+                  // Reset and start new recording
+                  setRecordingState("idle");
+                  setRecordingDuration(0);
+                  setCustomLabel("");
+                  setIsPlaying(false);
+                  setWaveformAmplitudes([]);
+                  recordingUriRef.current = null;
+                  if (soundRef.current) {
+                    soundRef.current.unloadAsync().catch(console.error);
+                    soundRef.current = null;
+                  }
+                  if (recordingRef.current) {
+                    recordingRef.current.stopAndUnloadAsync().catch(console.error);
+                    recordingRef.current = null;
+                  }
+                  // Immediately start recording again
+                  setTimeout(() => startRecording(), 100);
+                }}
+                style={[styles.refreshBtn, { backgroundColor: COLORS.bgLight }, styles.bigCircle]}
+              >
+                <RefreshCcw size={40} color={COLORS.textPrimary} />
+              </Pressable>
+            </View>
           )}
         </View>
 
         {/* Status Text */}
         <Text style={styles.statusText}>
-          {recordingState === "idle" && "Tap to record a sound"}
+          {recordingState === "idle" && "Tap to record a chime"}
           {recordingState === "recording" && "Recording..."}
-          {recordingState === "recorded" && (isPlaying ? "Playing..." : "Recording saved")}
+          {recordingState === "recorded" && (isPlaying ? "Playing..." : "Chime saved")}
         </Text>
 
         {/* Timer */}
@@ -510,7 +557,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         }) }] }]}>
           <Text style={styles.labelPrompt}>Label this sound:</Text>
           <TextInput
-            placeholder="e.g., Door knock, Microwave beep, Dog bark"
+            placeholder="e.g., Doorbell, laundry machine, dish washer"
             placeholderTextColor={COLORS.textSecondary}
             value={customLabel}
             onChangeText={setCustomLabel}
@@ -528,9 +575,9 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
 
       <View style={{ flex: 1 }} />
 
-      {/* Action Buttons */}
+      {/* Action Buttons - Fixed at bottom */}
       {recordingState === "recorded" && (
-        <Animated.View style={{ opacity: saveFade }}>
+        <Animated.View style={[styles.bottomButtonContainer, { opacity: saveFade }]}>
           <Pressable
             onPress={handleSave}
             disabled={!customLabel || isUploading}
@@ -543,11 +590,11 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
             ]}
           >
             <Text style={styles.primaryBtnText}>
-              {isUploading ? "Uploading..." : "Save sound"}
+              {isUploading ? "Uploading..." : "Save chime"}
             </Text>
           </Pressable>
 
-          <View style={styles.actionButtonsRow}>
+          {/* <View style={styles.actionButtonsRow}>
             <Pressable
               onPress={() => {
                 // Try again - reset to idle state
@@ -608,7 +655,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
             >
               <Text style={[styles.secondaryBtnText, { color: COLORS.critical }]}>Delete</Text>
             </Pressable>
-          </View>
+          </View> */}
         </Animated.View>
       )}
     </View>
@@ -623,9 +670,21 @@ const styles = StyleSheet.create({
 
   card: { backgroundColor: COLORS.card, borderRadius: 24, padding: 20 },
   center: { alignItems: "center", justifyContent: "center", marginBottom: 16 },
+  playbackControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
   bigCircle: {
     width: 96,
     height: 96,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  refreshBtn: {
+    width: 56,
+    height: 56,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
@@ -667,10 +726,13 @@ const styles = StyleSheet.create({
   },
 
   infoText: {
-    marginTop: 18,
+    marginTop: 4,
     textAlign: "center",
     color: COLORS.textSecondary,
     fontSize: 12,
+  },
+
+  bottomButtonContainer: {
   },
 
   primaryBtn: { borderRadius: 16, paddingVertical: 14, alignItems: "center" },

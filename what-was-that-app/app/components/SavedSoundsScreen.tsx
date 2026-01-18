@@ -291,23 +291,23 @@ export default function SavedSoundsScreen({
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
     >
-      <Text style={styles.title}>Saved Sounds</Text>
+      <Text style={styles.title}>Saved Chimes</Text>
       <Text style={styles.subtitle}>
-        {sounds.length} {sounds.length === 1 ? "sound" : "sounds"} ready to detect
+        {sounds.length} {sounds.length === 1 ? "chime" : "chimes"} ready to detect
       </Text>
 
       {/* Teach New Sound Button */}
       <Pressable onPress={onTeachSound} style={styles.teachBtn}>
         <Plus size={20} color="white" />
-        <Text style={styles.teachBtnText}>Teach a new sound</Text>
+        <Text style={styles.teachBtnText}>Record a chime</Text>
       </Pressable>
 
       {sounds.length === 0 ? (
         <View style={styles.emptyCard}>
           <Volume2 size={48} color={COLORS.textSecondary} />
-          <Text style={styles.emptyTitle}>No sounds saved yet</Text>
+          <Text style={styles.emptyTitle}>No chimes saved yet</Text>
           <Text style={styles.emptyBody}>
-            Use the Home screen to teach a new sound
+            Record a new chime to recognize
           </Text>
         </View>
       ) : (
