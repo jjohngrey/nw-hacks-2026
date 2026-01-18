@@ -16,6 +16,7 @@ import axios from 'axios';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { CONFIG, getBackendEndpoint } from '@/config';
+import { SafeAreaView } from 'react-native';
 
 // Configuration loaded from config.ts
 const BACKEND_URL = CONFIG.BACKEND_URL;
@@ -109,17 +110,17 @@ export default function SensorScreen() {
       audioBuffer.current = [];
       streamingSubscription.current = subscription;
       
-      console.log('✅ Audio streaming started:', recordingResult);
+      console.log('Audio streaming started:', recordingResult);
 
     } catch (error) {
-      console.error('❌ Failed to start streaming:', error);
+      console.error('Failed to start streaming:', error);
       Alert.alert('Error', 'Failed to start audio streaming: ' + error);
     }
   };
 
   const stopStreaming = async () => {
     try {
-      console.log('🛑 Stopping audio stream...');
+      console.log('Stopping audio stream...');
       
       if (streamingSubscription.current) {
         streamingSubscription.current.remove();
@@ -425,20 +426,17 @@ export default function SensorScreen() {
   };
 
   return (
+    <SafeAreaView style={styles.container}>
     <ThemedView style={styles.container}>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        <View style={styles.header}>
-          <ThemedText type="title" style={styles.title}>🎧 Auto Sound Detector</ThemedText>
-          <ThemedText style={styles.subtitle}>
-            Continuously monitors audio and triggers on loud sounds
-          </ThemedText>
-        </View>
 
         <View style={styles.infoCard}>
-          <ThemedText style={styles.infoTitle}>⚙️ Configuration:</ThemedText>
+          <ThemedText style={styles.infoTitle}>Configuration:</ThemedText>
           <View style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Backend:</ThemedText>
-            <ThemedText style={styles.infoValue}>{BACKEND_URL}</ThemedText>
+            <ThemedText style={styles.infoLabel}>Server:</ThemedText>
+            <ThemedText style={styles.infoValue} numberOfLines={1} ellipsizeMode="tail">
+              {BACKEND_URL}
+            </ThemedText>
           </View>
           <View style={styles.infoRow}>
             <ThemedText style={styles.infoLabel}>Buffer:</ThemedText>
@@ -452,6 +450,12 @@ export default function SensorScreen() {
             <ThemedText style={styles.infoLabel}>Cooldown:</ThemedText>
             <ThemedText style={styles.infoValue}>{COOLDOWN_MS / 1000}s</ThemedText>
           </View>
+          <View style={styles.infoRow}>
+            <ThemedText style={styles.infoLabel}>User:</ThemedText>
+            <ThemedText style={styles.infoValue} numberOfLines={2} ellipsizeMode="middle">
+              {USER_ID}
+            </ThemedText>
+          </View>
         </View>
 
         <View style={styles.controlsContainer}>
@@ -461,7 +465,7 @@ export default function SensorScreen() {
               onPress={startStreaming}
               disabled={isProcessing}
             >
-              <Text style={styles.buttonText}>▶️ Start Listening</Text>
+              <Text style={styles.buttonText}>Start Listening</Text>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -546,67 +550,9 @@ export default function SensorScreen() {
             </ThemedText>
           </View>
         )}
-
-        {matchResult && (
-          <View style={[
-            styles.resultCard,
-            matchResult.match ? styles.resultSuccess : styles.resultNoMatch
-          ]}>
-            <ThemedText style={styles.resultTitle}>
-              {matchResult.match ? '🎵 Match Found!' : '🔍 No Match'}
-            </ThemedText>
-            
-            {matchResult.match && (
-              <>
-                <View style={styles.resultItem}>
-                  <ThemedText style={styles.resultLabel}>Sound:</ThemedText>
-                  <ThemedText style={styles.resultValue}>{matchResult.match}</ThemedText>
-                </View>
-                <View style={styles.resultItem}>
-                  <ThemedText style={styles.resultLabel}>Confidence:</ThemedText>
-                  <ThemedText style={styles.resultValue}>
-                    {matchResult.confidencePercent}
-                  </ThemedText>
-                </View>
-              </>
-            )}
-
-            {!matchResult.match && (
-              <ThemedText style={styles.resultMessage}>
-                No matching fingerprint found.
-              </ThemedText>
-            )}
-
-            {matchResult.allScores && matchResult.allScores.length > 0 && (
-              <View style={styles.scoresContainer}>
-                <ThemedText style={styles.scoresTitle}>Top Matches:</ThemedText>
-                {matchResult.allScores.slice(0, 3).map((score, index) => (
-                  <View key={index} style={styles.scoreItem}>
-                    <ThemedText style={styles.scoreName}>
-                      {index + 1}. {score.audioId}
-                    </ThemedText>
-                    <ThemedText style={styles.scoreValue}>
-                      {(score.score * 100).toFixed(1)}%
-                    </ThemedText>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        )}
-
-        <View style={styles.footer}>
-          <ThemedText style={styles.footerText}>
-            💡 How it works:{'\n'}
-            • Continuously records audio in a 3s rolling buffer{'\n'}
-            • Audio gain: {AUDIO_GAIN}x amplification{'\n'}
-            • Triggers when sound exceeds {(TRIGGER_THRESHOLD * 100).toFixed(0)}% threshold{'\n'}
-            • Captures and uploads the last 3 seconds{'\n'}
-            • {COOLDOWN_MS / 1000}s cooldown between triggers
-          </ThemedText>
-        </View>
       </ScrollView>
     </ThemedView>
+    </SafeAreaView>
   );
 }
 
@@ -649,17 +595,22 @@ const styles = StyleSheet.create({
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: 8,
+    gap: 8,
   },
   infoLabel: {
     fontSize: 14,
     fontWeight: '600',
     opacity: 0.8,
+    flexShrink: 0,
   },
   infoValue: {
     fontSize: 14,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     fontWeight: 'bold',
+    flex: 1,
+    textAlign: 'right',
   },
   controlsContainer: {
     marginBottom: 20,
@@ -853,4 +804,3 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 });
-
