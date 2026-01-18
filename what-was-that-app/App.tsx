@@ -8,6 +8,7 @@ import TeachSoundScreen from "./app/components/TeachSoundScreen";
 import EventHistoryScreen from "./app/components/EventHistoryScreen";
 import SettingsScreen from "./app/components/SettingsScreen";
 import BottomNav from "./app/components/BottomNav";
+import { useNotifications } from "./hooks/use-notifications";
 
 export type Screen = "home" | "sounds" | "history" | "settings" | "teach";
 
@@ -22,6 +23,9 @@ export interface SavedSound {
 }
 
 export default function App() {
+  // Setup push notifications
+  const { expoPushToken, userId } = useNotifications();
+  
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [savedSounds, setSavedSounds] = useState<SavedSound[]>([
     {

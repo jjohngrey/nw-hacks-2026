@@ -23,6 +23,10 @@ recorded_fingerprints/*.m4a
 recorded_fingerprints/*.flac
 user_fingerprints/*.json
 
+
+# Device tokens (contains sensitive push notification tokens)
+device_tokens.json
+
 # Keep the folders but ignore contents
 !recorded_fingerprints/.gitkeep
 !user_fingerprints/.gitkeep

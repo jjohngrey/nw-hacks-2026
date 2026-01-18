@@ -46,8 +46,38 @@ const upload = multer({
 // Initialize Expo push notification client
 const expo = new Expo();
 
-// Store device push tokens (in production, use a real database)
+// Store device push tokens with persistence
+const DEVICE_TOKENS_PATH = path.join(__dirname, 'device_tokens.json');
 const deviceTokens = new Map(); // Map<userId, pushToken>
+
+// Load device tokens from file on startup
+function loadDeviceTokens() {
+  try {
+    if (fs.existsSync(DEVICE_TOKENS_PATH)) {
+      const data = fs.readFileSync(DEVICE_TOKENS_PATH, 'utf8');
+      const tokens = JSON.parse(data);
+      Object.entries(tokens).forEach(([userId, token]) => {
+        deviceTokens.set(userId, token);
+      });
+      console.log(`📱 Loaded ${deviceTokens.size} device token(s) from storage`);
+    }
+  } catch (error) {
+    console.error('Error loading device tokens:', error.message);
+  }
+}
+
+// Save device tokens to file
+function saveDeviceTokens() {
+  try {
+    const tokens = Object.fromEntries(deviceTokens);
+    fs.writeFileSync(DEVICE_TOKENS_PATH, JSON.stringify(tokens, null, 2));
+  } catch (error) {
+    console.error('Error saving device tokens:', error.message);
+  }
+}
+
+// Load tokens on startup
+loadDeviceTokens();
 
 class AudioFingerprint {
   constructor() {
@@ -761,7 +791,8 @@ app.post('/api/notifications/register', (req, res) => {
 
     // Store the push token
     deviceTokens.set(userId, pushToken);
-    console.log(`Registered push token for user: ${userId}`);
+    saveDeviceTokens(); // Persist to file
+    console.log(`✅ Registered push token for user: ${userId}`);
 
     res.json({
       success: true,
@@ -844,6 +875,7 @@ app.delete('/api/notifications/device/:userId', (req, res) => {
     
     if (deviceTokens.has(userId)) {
       deviceTokens.delete(userId);
+      saveDeviceTokens(); // Persist to file
       console.log(`🗑️ Removed device: ${userId}`);
       res.json({
         success: true,
@@ -869,6 +901,7 @@ app.delete('/api/notifications/devices/clear', (req, res) => {
   try {
     const count = deviceTokens.size;
     deviceTokens.clear();
+    saveDeviceTokens(); // Persist to file
     console.log(`🗑️ Cleared all ${count} registered devices`);
     res.json({
       success: true,

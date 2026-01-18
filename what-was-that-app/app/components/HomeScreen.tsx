@@ -1,17 +1,72 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import { View, Text, StyleSheet, Pressable, Alert } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
+import axios from "axios";
 
 interface HomeScreenProps {
   onTeachSound: () => void;
   onViewHistory: () => void;
 }
 
+// Get backend URL
+const PRODUCTION_BACKEND = 'http://155.138.215.227:3000';
+
+const getBackendUrl = () => {
+  if (PRODUCTION_BACKEND) {
+    return PRODUCTION_BACKEND;
+  }
+  const hostUri = Constants.expoConfig?.hostUri;
+  if (hostUri) {
+    const ip = hostUri.split(":")[0];
+    return `http://${ip}:3000`;
+  }
+  return "http://localhost:3000";
+};
+
 export default function HomeScreen({ onTeachSound, onViewHistory }: HomeScreenProps) {
   const [listening, setListening] = useState(false);
+  const [isSendingNotif, setIsSendingNotif] = useState(false);
 
   useEffect(() => {
     // your existing logic
   }, []);
+
+  const sendTestNotification = async () => {
+    try {
+      setIsSendingNotif(true);
+      
+      // Get userId from storage
+      const userId = await AsyncStorage.getItem('userId');
+      if (!userId) {
+        Alert.alert('Error', 'User ID not found. Please restart the app.');
+        return;
+      }
+
+      const backendUrl = getBackendUrl();
+      console.log('📤 Sending test notification to:', backendUrl);
+
+      const response = await axios.post(`${backendUrl}/api/notifications/test`, {
+        userId,
+        title: 'Test Notification 🔔',
+        body: 'This is a test notification from What Was That!',
+      });
+
+      if (response.data.success) {
+        Alert.alert('Success! 🎉', 'Test notification sent! Check your notifications.');
+      } else {
+        Alert.alert('Error', response.data.error || 'Failed to send notification');
+      }
+    } catch (error: any) {
+      console.error('Error sending test notification:', error);
+      Alert.alert(
+        'Error',
+        `Failed to send test notification: ${error.message || 'Unknown error'}`
+      );
+    } finally {
+      setIsSendingNotif(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -39,6 +94,16 @@ export default function HomeScreen({ onTeachSound, onViewHistory }: HomeScreenPr
 
         <Pressable onPress={onViewHistory} style={styles.secondaryBtn}>
           <Text style={styles.secondaryBtnText}>View event history</Text>
+        </Pressable>
+
+        <Pressable 
+          onPress={sendTestNotification} 
+          style={styles.testBtn}
+          disabled={isSendingNotif}
+        >
+          <Text style={styles.testBtnText}>
+            {isSendingNotif ? 'Sending...' : 'Send Test Notification'}
+          </Text>
         </Pressable>
       </View>
     </View>
@@ -73,4 +138,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryBtnText: { color: "white", fontWeight: "700" },
+
+  testBtn: {
+    backgroundColor: "#22C55E",
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  testBtnText: { color: "white", fontWeight: "700" },
 });
