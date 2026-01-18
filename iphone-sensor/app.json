@@ -10,7 +10,19 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.paulineongchan.iphonesensor"
+      "bundleIdentifier": "com.johngrey.iphonesensor",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "This app needs access to the microphone to record and identify sounds.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSExceptionDomains": {
+            "155.138.215.227": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            }
+          }
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +33,10 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.paulineongchan.iphonesensor"
+      "package": "com.paulineongchan.iphonesensor",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
