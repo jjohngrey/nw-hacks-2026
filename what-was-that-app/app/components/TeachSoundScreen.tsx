@@ -13,12 +13,11 @@ import {
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import { Mic, Square, ArrowLeft, Play, Pause } from "lucide-react-native";
-import axios from "axios";
 import Constants from "expo-constants";
 
 interface TeachSoundScreenProps {
   onClose: () => void;
-  onSave: (label: string, audioData: string) => void;
+  onSave: (label: string, audioData: string, audioUri?: string) => void;
 }
 
 type RecordingState = "idle" | "recording" | "recorded";
@@ -234,11 +233,38 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
           await soundRef.current.unloadAsync();
         }
 
+        // Set audio mode for playback - route through speaker at max volume
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false, // Use speaker on Android
+          allowsRecordingIOS: false, // Not recording, just playing
+        });
+
         const { sound } = await Audio.Sound.createAsync(
           { uri: recordingUriRef.current },
-          { shouldPlay: true }
+          { 
+            shouldPlay: true,
+            volume: 1.0, // Maximum volume
+            isMuted: false,
+            rate: 1.0,
+          }
         );
         soundRef.current = sound;
+        
+        // Set volume to maximum explicitly (some platforms need this)
+        await sound.setVolumeAsync(1.0);
+        
+        // Ensure it's not muted
+        await sound.setIsMutedAsync(false);
+        
+        // Double-check volume is at max
+        try {
+          await sound.setVolumeAsync(1.0);
+        } catch (e) {
+          console.log("Could not set volume:", e);
+        }
 
         sound.setOnPlaybackStatusUpdate((status) => {
           if (status.isLoaded) {
@@ -264,37 +290,52 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       const backendUrl = getBackendUrl();
       const audioId = `audio-${Date.now()}`;
 
-      // Read file as base64
-      const base64 = await FileSystem.readAsStringAsync(audioUri, {
-        encoding: FileSystem.EncodingType.Base64,
+      // Create FormData to send file
+      const formData = new FormData();
+      
+      // Get file name and type from URI
+      const uriParts = audioUri.split('.');
+      const fileExtension = uriParts[uriParts.length - 1] || 'm4a';
+      const fileName = `${audioId}.${fileExtension}`;
+      
+      // Determine MIME type
+      const mimeType = fileExtension === 'm4a' ? 'audio/m4a' : 
+                      fileExtension === 'mp3' ? 'audio/mpeg' :
+                      fileExtension === 'wav' ? 'audio/wav' :
+                      'audio/m4a';
+      
+      // Add file to FormData (React Native FormData format)
+      formData.append('audio', {
+        uri: audioUri,
+        type: mimeType,
+        name: fileName,
+      } as any);
+      
+      formData.append('audioId', audioId);
+      if (label) {
+        formData.append('label', label);
+      }
+
+      // Upload to backend using fetch (works better with FormData in React Native)
+      const response = await fetch(`${backendUrl}/api/audio/upload`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          // Don't set Content-Type - let fetch set it automatically with boundary
+        },
       });
 
-      // Upload to backend
-      const response = await axios.post(
-        `${backendUrl}/api/audio/upload`,
-        {
-          audioId,
-          label,
-          audioData: base64,
-          format: "m4a", // or detect from URI
-        },
-        {
-          headers: {
-            "Content-Type": "application/json",
-          },
-          timeout: 30000,
-        }
-      );
+      const data = await response.json();
 
-      if (response.data.success) {
+      if (data.success) {
         console.log("Audio uploaded successfully:", audioId);
         return audioId;
       } else {
-        throw new Error(response.data.error || "Upload failed");
+        throw new Error(data.error || "Upload failed");
       }
     } catch (err: any) {
       console.error("Failed to upload audio:", err);
-      // Don't show alert here - let the user know it's saved locally
+      Alert.alert("Upload Failed", "Could not upload to server. Audio saved locally.");
       return null;
     } finally {
       setIsUploading(false);
@@ -316,7 +357,8 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       // Use backend audioId if available, otherwise generate local ID
       const finalAudioId = audioId || `audio-${Date.now()}`;
       
-      onSave(customLabel, finalAudioId);
+      // Pass the audio URI so it can be played back later
+      onSave(customLabel, finalAudioId, recordingUriRef.current);
       onClose();
     } catch (err) {
       console.error("Failed to save:", err);
@@ -439,7 +481,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
 
       <View style={{ flex: 1 }} />
 
-      {/* Save Button */}
+      {/* Action Buttons */}
       {recordingState === "recorded" && (
         <Animated.View style={{ opacity: saveFade }}>
           <Pressable
@@ -458,23 +500,68 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
             </Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => {
-              setRecordingState("idle");
-              setRecordingDuration(0);
-              setCustomLabel("");
-              setIsPlaying(false);
-              setWaveformAmplitudes([]);
-              recordingUriRef.current = null;
-              if (soundRef.current) {
-                soundRef.current.unloadAsync().catch(console.error);
-              }
-            }}
-            style={styles.secondaryBtn}
-            disabled={isUploading}
-          >
-            <Text style={styles.secondaryBtnText}>Record again</Text>
-          </Pressable>
+          <View style={styles.actionButtonsRow}>
+            <Pressable
+              onPress={() => {
+                // Try again - reset to idle state
+                setRecordingState("idle");
+                setRecordingDuration(0);
+                setCustomLabel("");
+                setIsPlaying(false);
+                setWaveformAmplitudes([]);
+                recordingUriRef.current = null;
+                if (soundRef.current) {
+                  soundRef.current.unloadAsync().catch(console.error);
+                  soundRef.current = null;
+                }
+                if (recordingRef.current) {
+                  recordingRef.current.stopAndUnloadAsync().catch(console.error);
+                  recordingRef.current = null;
+                }
+              }}
+              style={[styles.secondaryBtn, styles.tryAgainBtn]}
+              disabled={isUploading}
+            >
+              <Text style={styles.secondaryBtnText}>Try again</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => {
+                // Delete and go back
+                Alert.alert(
+                  "Delete Recording?",
+                  "Are you sure you want to delete this recording?",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete",
+                      style: "destructive",
+                      onPress: () => {
+                        // Clean up audio files
+                        if (recordingUriRef.current) {
+                          FileSystem.deleteAsync(recordingUriRef.current, { idempotent: true }).catch(console.error);
+                        }
+                        if (soundRef.current) {
+                          soundRef.current.unloadAsync().catch(console.error);
+                          soundRef.current = null;
+                        }
+                        if (recordingRef.current) {
+                          recordingRef.current.stopAndUnloadAsync().catch(console.error);
+                          recordingRef.current = null;
+                        }
+                        // Go back to home
+                        onClose();
+                      },
+                    },
+                  ]
+                );
+              }}
+              style={[styles.secondaryBtn, styles.deleteBtn]}
+              disabled={isUploading}
+            >
+              <Text style={[styles.secondaryBtnText, { color: COLORS.critical }]}>Delete</Text>
+            </Pressable>
+          </View>
         </Animated.View>
       )}
     </View>
@@ -542,12 +629,25 @@ const styles = StyleSheet.create({
   primaryBtn: { borderRadius: 16, paddingVertical: 14, alignItems: "center" },
   primaryBtnText: { color: "white", fontWeight: "600", fontSize: 16 },
 
-  secondaryBtn: {
+  actionButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
     marginTop: 10,
+  },
+  secondaryBtn: {
+    flex: 1,
     borderRadius: 16,
     paddingVertical: 14,
     alignItems: "center",
     backgroundColor: COLORS.card,
+  },
+  tryAgainBtn: {
+    backgroundColor: COLORS.card,
+  },
+  deleteBtn: {
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.critical,
   },
   secondaryBtnText: { color: COLORS.textPrimary, fontWeight: "600", fontSize: 16 },
 });

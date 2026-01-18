@@ -18,6 +18,7 @@ export interface SavedSound {
   timesDetected: number;
   enabled: boolean;
   audioData: string;
+  audioUri?: string; // Local URI for playback
 }
 
 export default function App() {
@@ -49,7 +50,7 @@ export default function App() {
     },
   ]);
 
-  const handleSaveSound = (label: string, audioData: string) => {
+  const handleSaveSound = (label: string, audioData: string, audioUri?: string) => {
     const newSound: SavedSound = {
       id: Date.now().toString(),
       label,
@@ -57,6 +58,7 @@ export default function App() {
       timesDetected: 0,
       enabled: true,
       audioData,
+      audioUri,
     };
     setSavedSounds((prev) => [newSound, ...prev]);
   };

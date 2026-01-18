@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,9 +6,13 @@ import {
   Pressable,
   Switch,
   Alert,
+  ScrollView,
+  Platform,
 } from "react-native";
+import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system";
 import { MotiView } from "moti";
-import { Trash2, Volume2, Plus } from "lucide-react-native";
+import { Trash2, Volume2, Plus, Play, Pause } from "lucide-react-native";
 
 interface SavedSound {
   id: string;
@@ -17,6 +21,7 @@ interface SavedSound {
   timesDetected: number;
   enabled: boolean;
   audioData: string;
+  audioUri?: string;
 }
 
 interface SavedSoundsScreenProps {
@@ -44,6 +49,18 @@ export default function SavedSoundsScreen({
   onTeachSound,
 }: SavedSoundsScreenProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const soundRefs = useRef<Map<string, Audio.Sound>>(new Map());
+
+  useEffect(() => {
+    // Cleanup sounds on unmount
+    return () => {
+      soundRefs.current.forEach((sound) => {
+        sound.unloadAsync().catch(console.error);
+      });
+      soundRefs.current.clear();
+    };
+  }, []);
 
   const confirmDelete = (sound: SavedSound) => {
     Alert.alert(
@@ -54,15 +71,156 @@ export default function SavedSoundsScreen({
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => onDeleteSound(sound.id),
+          onPress: () => {
+            // Stop and cleanup sound if playing
+            if (soundRefs.current.has(sound.id)) {
+              soundRefs.current.get(sound.id)?.unloadAsync().catch(console.error);
+              soundRefs.current.delete(sound.id);
+            }
+            if (playingId === sound.id) {
+              setPlayingId(null);
+            }
+            onDeleteSound(sound.id);
+          },
         },
       ],
       { cancelable: true }
     );
   };
 
+  const playSound = async (sound: SavedSound) => {
+    try {
+      // Stop any currently playing sound
+      if (playingId && playingId !== sound.id) {
+        await stopSound(playingId);
+      }
+
+      // If this sound is already playing, stop it
+      if (playingId === sound.id) {
+        await stopSound(sound.id);
+        return;
+      }
+
+      // If no audio URI, show error
+      if (!sound.audioUri) {
+        Alert.alert(
+          "No Audio Available",
+          "This sound doesn't have a playable audio file. Please re-record it."
+        );
+        return;
+      }
+
+      // Unload previous sound for this ID if exists
+      if (soundRefs.current.has(sound.id)) {
+        await soundRefs.current.get(sound.id)?.unloadAsync();
+        soundRefs.current.delete(sound.id);
+      }
+
+      // Check if file exists (for local files)
+      if (sound.audioUri.startsWith('file://') || !sound.audioUri.startsWith('http')) {
+        try {
+          const fileInfo = await FileSystem.getInfoAsync(sound.audioUri);
+          if (!fileInfo.exists) {
+            Alert.alert(
+              "File Not Found",
+              "The audio file is missing. Please re-record this sound."
+            );
+            return;
+          }
+        } catch (fileCheckError) {
+          console.log("Could not check file existence, proceeding anyway:", fileCheckError);
+        }
+      }
+
+      console.log("Playing audio from URI:", sound.audioUri);
+
+      // Set audio mode for playback - route through speaker at max volume
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false, // Use speaker on Android
+        allowsRecordingIOS: false, // Not recording, just playing
+      });
+
+      // Create and play new sound
+      const { sound: audioSound } = await Audio.Sound.createAsync(
+        { uri: sound.audioUri },
+        {
+          shouldPlay: true,
+          volume: 1.0, // Maximum volume
+          isMuted: false,
+          rate: 1.0,
+        }
+      );
+
+      // Set volume to maximum explicitly (some platforms need this)
+      await audioSound.setVolumeAsync(1.0);
+      
+      // Ensure it's not muted
+      await audioSound.setIsMutedAsync(false);
+      
+      // On iOS, we might need to set the audio session category
+      if (Platform.OS === 'ios') {
+        // The audio mode should handle this, but we ensure volume is max
+        try {
+          await audioSound.setVolumeAsync(1.0);
+        } catch (e) {
+          console.log("Could not set volume:", e);
+        }
+      }
+
+      soundRefs.current.set(sound.id, audioSound);
+      setPlayingId(sound.id);
+
+      // Handle playback status
+      audioSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded) {
+          setPlayingId(status.isPlaying ? sound.id : null);
+          if (status.didJustFinish) {
+            setPlayingId(null);
+          }
+        } else if (status.error) {
+          console.error("Playback error:", status.error);
+          setPlayingId(null);
+        }
+      });
+    } catch (err: any) {
+      console.error("Failed to play sound:", err);
+      Alert.alert(
+        "Playback Error", 
+        err.message || "Failed to play audio. The file may be missing or corrupted."
+      );
+      setPlayingId(null);
+      // Clean up on error
+      if (soundRefs.current.has(sound.id)) {
+        soundRefs.current.delete(sound.id);
+      }
+    }
+  };
+
+  const stopSound = async (soundId: string) => {
+    try {
+      const sound = soundRefs.current.get(soundId);
+      if (sound) {
+        await sound.stopAsync();
+        await sound.unloadAsync();
+        soundRefs.current.delete(soundId);
+      }
+      if (playingId === soundId) {
+        setPlayingId(null);
+      }
+    } catch (err) {
+      console.error("Failed to stop sound:", err);
+    }
+  };
+
   return (
-    <View style={styles.container}>
+    <ScrollView 
+      style={styles.scrollView}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={styles.title}>Saved Sounds</Text>
       <Text style={styles.subtitle}>
         {sounds.length} {sounds.length === 1 ? "sound" : "sounds"} ready to detect
@@ -86,6 +244,7 @@ export default function SavedSoundsScreen({
         <View style={styles.list}>
           {sounds.map((sound, idx) => {
             const expanded = expandedId === sound.id;
+            const isPlaying = playingId === sound.id;
 
             return (
               <MotiView
@@ -124,13 +283,20 @@ export default function SavedSoundsScreen({
                 {/* Action Buttons */}
                 <View style={styles.actionsRow}>
                   <Pressable
-                    onPress={() =>
-                      setExpandedId(expanded ? null : sound.id)
-                    }
-                    style={styles.actionBtn}
+                    onPress={() => playSound(sound)}
+                    style={[
+                      styles.actionBtn,
+                      isPlaying && styles.actionBtnPlaying
+                    ]}
                   >
-                    <Volume2 size={16} color={COLORS.textPrimary} />
-                    <Text style={styles.actionBtnText}>Play sample</Text>
+                    {isPlaying ? (
+                      <Pause size={16} color={COLORS.textPrimary} />
+                    ) : (
+                      <Play size={16} color={COLORS.textPrimary} />
+                    )}
+                    <Text style={styles.actionBtnText}>
+                      {isPlaying ? "Playing..." : "Play sample"}
+                    </Text>
                   </Pressable>
 
                   <Pressable
@@ -162,11 +328,19 @@ export default function SavedSoundsScreen({
           })}
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollView: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  scrollContent: {
+    padding: 24,
+    paddingBottom: 100, // Extra padding for bottom nav
+  },
   container: {
     flex: 1,
     backgroundColor: COLORS.bg,
@@ -191,7 +365,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 10, // if RN complains, use marginLeft on text
+    gap: 10,
     marginBottom: 16,
   },
   teachBtnText: {
@@ -218,12 +392,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   list: {
-    gap: 12, // if RN complains, replace with marginBottom on cards
+    gap: 12,
   },
   card: {
     backgroundColor: COLORS.card,
     borderRadius: 18,
     padding: 16,
+    marginBottom: 12,
   },
   cardTopRow: {
     flexDirection: "row",
@@ -248,7 +423,7 @@ const styles = StyleSheet.create({
   },
   actionsRow: {
     flexDirection: "row",
-    gap: 10, // if RN complains, use marginRight on first button
+    gap: 10,
     paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: COLORS.bgLight,
@@ -263,6 +438,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  actionBtnPlaying: {
+    backgroundColor: COLORS.detected,
+    opacity: 0.9,
   },
   actionBtnText: {
     color: COLORS.textPrimary,
