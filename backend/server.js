@@ -543,8 +543,40 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
     const audioFilePath = req.file.path;
     console.log(`📤 Received audio upload: ${req.file.filename} from user: ${userId}`);
 
-    // Create fingerprint from uploaded file
-    await fingerprinter.storeAudio(audioFilePath, audioId, userId);
+    // Convert to MP3 if not already MP3
+    let mp3FilePath = audioFilePath;
+    const fileExtension = path.extname(req.file.filename).toLowerCase();
+    
+    if (fileExtension !== '.mp3') {
+      console.log(`🔄 Converting ${fileExtension} to MP3...`);
+      mp3FilePath = audioFilePath.replace(fileExtension, '.mp3');
+      
+      await new Promise((resolve, reject) => {
+        ffmpeg(audioFilePath)
+          .toFormat('mp3')
+          .audioCodec('libmp3lame')
+          .audioBitrate('192k')
+          .on('end', () => {
+            console.log('✅ Conversion to MP3 complete');
+            // Delete original file after successful conversion
+            try {
+              fs.unlinkSync(audioFilePath);
+              console.log(`🗑️  Deleted original file: ${path.basename(audioFilePath)}`);
+            } catch (e) {
+              console.error('Warning: Could not delete original file:', e.message);
+            }
+            resolve();
+          })
+          .on('error', (err) => {
+            console.error('❌ FFmpeg conversion error:', err);
+            reject(err);
+          })
+          .save(mp3FilePath);
+      });
+    }
+
+    // Create fingerprint from MP3 file
+    await fingerprinter.storeAudio(mp3FilePath, audioId, userId);
     fingerprinter.saveDatabase(DB_PATH);
 
     res.json({ 
@@ -552,14 +584,23 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
       message: `Audio fingerprint created for: ${audioId}`,
       audioId,
       userId,
-      filename: req.file.filename
+      filename: path.basename(mp3FilePath),
+      format: 'mp3'
     });
   } catch (error) {
     console.error('Error processing upload:', error);
-    // Clean up file on error
+    // Clean up files on error
     if (req.file) {
       try {
         fs.unlinkSync(req.file.path);
+      } catch (e) {}
+      
+      // Also try to delete MP3 if it was created
+      try {
+        const mp3Path = req.file.path.replace(path.extname(req.file.path), '.mp3');
+        if (fs.existsSync(mp3Path)) {
+          fs.unlinkSync(mp3Path);
+        }
       } catch (e) {}
     }
     res.status(500).json({ 

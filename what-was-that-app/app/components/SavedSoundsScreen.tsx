@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -8,7 +8,8 @@ import {
   Alert,
 } from "react-native";
 import { MotiView } from "moti";
-import { Trash2, Volume2, Plus } from "lucide-react-native";
+import { Trash2, Volume2, Plus, Play, Pause } from "lucide-react-native";
+import { Audio } from "expo-av";
 
 interface SavedSound {
   id: string;
@@ -17,6 +18,7 @@ interface SavedSound {
   timesDetected: number;
   enabled: boolean;
   audioData: string;
+  audioUri?: string; // Local URI for playback
 }
 
 interface SavedSoundsScreenProps {
@@ -44,6 +46,77 @@ export default function SavedSoundsScreen({
   onTeachSound,
 }: SavedSoundsScreenProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
+
+  // Setup audio mode and cleanup on unmount
+  useEffect(() => {
+    // Configure audio mode for loud playback
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: false,
+    }).catch(console.error);
+
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(console.error);
+      }
+    };
+  }, []);
+
+  const togglePlaySound = async (sound: SavedSound) => {
+    try {
+      // If this sound is currently playing, pause it
+      if (playingId === sound.id) {
+        if (soundRef.current) {
+          await soundRef.current.pauseAsync();
+          setPlayingId(null);
+        }
+        return;
+      }
+
+      // Stop any currently playing sound
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+
+      // If no audioUri, show alert
+      if (!sound.audioUri) {
+        Alert.alert(
+          "No Audio Available",
+          "This sound was saved before audio recording was implemented. Re-record it to enable playback."
+        );
+        return;
+      }
+
+      // Load and play the new sound at full volume
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: sound.audioUri },
+        { shouldPlay: true, volume: 1.0 }
+      );
+      
+      soundRef.current = newSound;
+      setPlayingId(sound.id);
+      
+      // Ensure volume is at maximum
+      await newSound.setVolumeAsync(1.0);
+
+      // When playback finishes, reset state
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          setPlayingId(null);
+        }
+      });
+    } catch (error) {
+      console.error("Failed to play sound:", error);
+      Alert.alert("Error", "Failed to play audio sample.");
+      setPlayingId(null);
+    }
+  };
 
   const confirmDelete = (sound: SavedSound) => {
     Alert.alert(
@@ -124,13 +197,27 @@ export default function SavedSoundsScreen({
                 {/* Action Buttons */}
                 <View style={styles.actionsRow}>
                   <Pressable
-                    onPress={() =>
-                      setExpandedId(expanded ? null : sound.id)
-                    }
+                    onPress={() => togglePlaySound(sound)}
                     style={styles.actionBtn}
                   >
-                    <Volume2 size={16} color={COLORS.textPrimary} />
-                    <Text style={styles.actionBtnText}>Play sample</Text>
+                    {playingId === sound.id ? (
+                      <Pause size={16} color={COLORS.primary} />
+                    ) : (
+                      <Play size={16} color={COLORS.textPrimary} />
+                    )}
+                    <Text style={[
+                      styles.actionBtnText,
+                      playingId === sound.id && { color: COLORS.primary }
+                    ]}>
+                      {playingId === sound.id ? "Playing..." : "Play sample"}
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => setExpandedId(expanded ? null : sound.id)}
+                    style={styles.infoBtn}
+                  >
+                    <Volume2 size={16} color={COLORS.textSecondary} />
                   </Pressable>
 
                   <Pressable
@@ -268,6 +355,14 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: 13,
     fontWeight: "600",
+  },
+  infoBtn: {
+    backgroundColor: COLORS.bgLight,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
   },
   deleteBtn: {
     backgroundColor: COLORS.bgLight,

@@ -19,7 +19,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface TeachSoundScreenProps {
   onClose: () => void;
-  onSave: (label: string, audioData: string) => void;
+  onSave: (label: string, audioData: string, audioUri: string) => void;
 }
 
 type RecordingState = "idle" | "recording" | "recorded";
@@ -178,10 +178,33 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       animateWaveform();
 
-      // Start audio recording
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      // Start audio recording with custom high-quality settings
+      const { recording } = await Audio.Recording.createAsync({
+        isMeteringEnabled: true,
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 44100,
+          numberOfChannels: 2,
+          bitRate: 128000,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.MAX,
+          sampleRate: 44100,
+          numberOfChannels: 2,
+          bitRate: 128000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {
+          mimeType: 'audio/webm',
+          bitsPerSecond: 128000,
+        },
+      });
       recordingRef.current = recording;
     } catch (err) {
       console.error("Failed to start recording", err);
@@ -349,12 +372,12 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       
       if (audioId) {
         // Successfully uploaded and fingerprinted
-        onSave(customLabel, audioId);
+        onSave(customLabel, audioId, recordingUriRef.current);
         onClose();
       } else {
         // Upload failed, but keep the local recording
         const fallbackId = `local-${Date.now()}`;
-        onSave(customLabel, fallbackId);
+        onSave(customLabel, fallbackId, recordingUriRef.current);
         onClose();
       }
     } catch (err) {
