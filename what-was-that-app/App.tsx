@@ -3,6 +3,7 @@ import { View, StyleSheet } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import axios from "axios";
 import Constants from "expo-constants";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import HomeScreen from "./app/components/HomeScreen";
 import SavedSoundsScreen from "./app/components/SavedSoundsScreen";
@@ -47,6 +48,29 @@ export default function App() {
   const [savedSounds, setSavedSounds] = useState<SavedSound[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Save audio URI to local storage
+  const saveAudioUri = async (audioId: string, audioUri: string) => {
+    try {
+      const key = `audioUri_${audioId}`;
+      await AsyncStorage.setItem(key, audioUri);
+      console.log(`💾 Saved audio URI for ${audioId}`);
+    } catch (error) {
+      console.error('Error saving audio URI:', error);
+    }
+  };
+
+  // Load audio URI from local storage
+  const loadAudioUri = async (audioId: string): Promise<string | undefined> => {
+    try {
+      const key = `audioUri_${audioId}`;
+      const uri = await AsyncStorage.getItem(key);
+      return uri || undefined;
+    } catch (error) {
+      console.error('Error loading audio URI:', error);
+      return undefined;
+    }
+  };
+
   // Fetch fingerprints from backend
   const fetchFingerprints = async () => {
     if (!userId) {
@@ -67,16 +91,21 @@ export default function App() {
         const fingerprints = response.data.fingerprints;
         console.log(`✅ Fetched ${fingerprints.length} fingerprints`);
 
-        // Transform backend data to SavedSound format
-        const sounds: SavedSound[] = fingerprints.map((fp: any) => ({
-          id: fp.audioId,
-          label: fp.audioId, // Use audioId as label (or fetch from metadata if you store it)
-          dateAdded: fp.timestamp ? new Date(fp.timestamp).toLocaleDateString() : 'Unknown',
-          timesDetected: 0, // Could track this in backend
-          enabled: true,
-          audioData: fp.audioId,
-          audioUri: undefined, // Not stored in backend
-        }));
+        // Transform backend data to SavedSound format and load audio URIs
+        const sounds: SavedSound[] = await Promise.all(
+          fingerprints.map(async (fp: any) => {
+            const audioUri = await loadAudioUri(fp.audioId);
+            return {
+              id: fp.audioId,
+              label: fp.audioId,
+              dateAdded: fp.timestamp ? new Date(fp.timestamp).toLocaleDateString() : 'Unknown',
+              timesDetected: 0,
+              enabled: true,
+              audioData: fp.audioId,
+              audioUri, // Load from AsyncStorage
+            };
+          })
+        );
 
         setSavedSounds(sounds);
       }
@@ -101,7 +130,10 @@ export default function App() {
     }
   }, [currentScreen]);
 
-  const handleSaveSound = (label: string, audioData: string, audioUri: string) => {
+  const handleSaveSound = async (label: string, audioData: string, audioUri: string) => {
+    // Save audio URI to local storage for playback
+    await saveAudioUri(audioData, audioUri);
+    
     const newSound: SavedSound = {
       id: Date.now().toString(),
       label,
@@ -132,6 +164,11 @@ export default function App() {
 
       // Optimistically remove from UI
       setSavedSounds((prev) => prev.filter((sound) => sound.id !== id));
+
+      // Delete audio URI from local storage
+      const key = `audioUri_${id}`;
+      await AsyncStorage.removeItem(key);
+      console.log('💾 Deleted audio URI from storage');
 
       // Delete from backend
       const response = await axios.delete(`${backendUrl}/api/audio/fingerprint/${id}`);

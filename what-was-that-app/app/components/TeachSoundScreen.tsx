@@ -19,7 +19,7 @@ import axios from "axios";
 
 interface TeachSoundScreenProps {
   onClose: () => void;
-  onSave: (label: string, audioData: string, audioUri: string) => void;
+  onSave: (label: string, audioData: string, audioUri: string) => Promise<void> | void;
 }
 
 type RecordingState = "idle" | "recording" | "recorded";
@@ -399,12 +399,12 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       
       if (audioId) {
         // Successfully uploaded and fingerprinted
-        onSave(customLabel, audioId, recordingUriRef.current);
+        await onSave(customLabel, audioId, recordingUriRef.current);
         onClose();
       } else {
         // Upload failed, but keep the local recording
         const fallbackId = `local-${Date.now()}`;
-        onSave(customLabel, fallbackId, recordingUriRef.current);
+        await onSave(customLabel, fallbackId, recordingUriRef.current);
         onClose();
       }
     } catch (err) {
