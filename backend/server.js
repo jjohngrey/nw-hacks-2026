@@ -86,13 +86,16 @@ loadDeviceTokens();
 
 // CONFIGURATION: Adjust these values to tune matching accuracy
 const MATCHING_CONFIG = {
-  DEFAULT_THRESHOLD: 0.65,        // Lower from 0.85 - matching threshold (0.0-1.0)
-  NORMALIZE_AUDIO: true,          // Normalize volume to reduce amplitude variations
-  HIGH_PASS_FILTER: true,         // Remove low-frequency noise (< 80Hz)
-  HIGH_PASS_CUTOFF: 80,           // Hz - cutoff frequency for high-pass filter
-  OFFSET_SEARCH_RANGE: 0.1,       // Search ±10% of audio length for time alignment
-  OFFSET_SEARCH_STEP: 2,          // Step size for offset search (smaller = more accurate but slower)
-  LOG_MATCHING: true              // Log detailed matching information
+  DEFAULT_THRESHOLD: 0.85,        // INCREASED: Much stricter matching threshold
+  MIN_NOTIFICATION_CONFIDENCE: 0.80, // Only send notifications for very confident matches
+  NORMALIZE_AUDIO: true,
+  HIGH_PASS_FILTER: true,
+  HIGH_PASS_CUTOFF: 80,
+  LOG_MATCHING: true,
+  // New stricter comparison settings
+  REQUIRE_TEMPORAL_CONSISTENCY: true,  // Require consistent matching across time
+  MIN_CONSISTENT_FRAMES: 0.6,          // At least 60% of frames must match well
+  STRICT_SPECTRAL_MATCHING: true       // Use stricter spectral comparison
 };
 
 class AudioFingerprint {
@@ -104,17 +107,11 @@ class AudioFingerprint {
   async generateFingerprint(audioPath) {
     let wavPath = null;
     try {
-      // Convert to WAV format for processing
       wavPath = await this.convertToWav(audioPath);
-      
-      // Read and decode WAV file
       const buffer = fs.readFileSync(wavPath);
       const audioData = await decode(buffer);
-      
-      // Extract features (simplified - using peaks in frequency spectrum)
       const fingerprint = this.extractFeatures(audioData);
       
-      // Clean up: delete temporary WAV file if it's different from input
       if (wavPath !== audioPath && fs.existsSync(wavPath)) {
         fs.unlinkSync(wavPath);
         console.log(`Cleaned up temporary file: ${wavPath}`);
@@ -122,7 +119,6 @@ class AudioFingerprint {
       
       return fingerprint;
     } catch (error) {
-      // Clean up on error too
       if (wavPath && wavPath !== audioPath && fs.existsSync(wavPath)) {
         fs.unlinkSync(wavPath);
       }
@@ -130,10 +126,8 @@ class AudioFingerprint {
     }
   }
 
-  // Convert any audio to WAV
   convertToWav(inputPath) {
     return new Promise((resolve, reject) => {
-      // If already a WAV file, just return the path
       if (inputPath.toLowerCase().endsWith('.wav')) {
         resolve(inputPath);
         return;
@@ -149,43 +143,52 @@ class AudioFingerprint {
     });
   }
 
-  // Extract audio features with frequency analysis
+  // IMPROVED: More discriminative feature extraction
   extractFeatures(audioData) {
-    let samples = audioData.channelData[0]; // Use first channel
+    let samples = audioData.channelData[0];
     const sampleRate = audioData.sampleRate;
     
-    // IMPROVEMENT 1: Normalize audio to reduce amplitude variations
     samples = this.normalizeAudio(samples);
-    
-    // IMPROVEMENT 2: Apply high-pass filter to remove low-frequency noise
     samples = this.highPassFilter(samples, 80, sampleRate);
     
-    // More sophisticated feature extraction
     const fingerprint = [];
-    const windowSize = 512; // Reduced FFT window size for speed
-    const hopSize = 2048; // Larger hop for faster processing
+    const windowSize = 2048;  // INCREASED for better frequency resolution
+    const hopSize = 512;      // DECREASED for more temporal detail
     
     let prevSpectrum = null;
     
     for (let i = 0; i < samples.length - windowSize; i += hopSize) {
       const window = this.applyHannWindow(samples.slice(i, i + windowSize));
-      const spectrum = this.simpleFFT(window);
+      const spectrum = this.computeFullFFT(window);  // CHANGED: Full FFT, no downsampling
       
-      // Extract multiple features for each window
+      // Extract robust features
       const features = {
+        // Time-domain features
         energy: this.calculateEnergy(window),
         zcr: this.calculateZeroCrossingRate(window),
-        spectralCentroid: this.calculateSpectralCentroid(spectrum, sampleRate, windowSize),
+        
+        // Spectral features - these are most discriminative
+        spectralCentroid: this.calculateSpectralCentroid(spectrum, sampleRate),
         spectralFlux: prevSpectrum ? this.calculateSpectralFluxBetween(spectrum, prevSpectrum) : 0,
-        spectralRolloff: this.calculateSpectralRolloff(spectrum, sampleRate, windowSize),
-        // Add frequency band energies for more specificity
-        subBass: this.getBandEnergy(spectrum, 20, 60, sampleRate, windowSize),
-        bass: this.getBandEnergy(spectrum, 60, 250, sampleRate, windowSize),
-        lowMid: this.getBandEnergy(spectrum, 250, 500, sampleRate, windowSize),
-        mid: this.getBandEnergy(spectrum, 500, 2000, sampleRate, windowSize),
-        highMid: this.getBandEnergy(spectrum, 2000, 4000, sampleRate, windowSize),
-        presence: this.getBandEnergy(spectrum, 4000, 6000, sampleRate, windowSize),
-        brilliance: this.getBandEnergy(spectrum, 6000, 20000, sampleRate, windowSize)
+        spectralRolloff: this.calculateSpectralRolloff(spectrum, sampleRate),
+        spectralFlatness: this.calculateSpectralFlatness(spectrum),  // NEW: Distinguishes tonal vs noise
+        
+        // IMPROVED: More frequency bands with better resolution
+        subBass: this.getBandEnergy(spectrum, 20, 60, sampleRate),
+        bass: this.getBandEnergy(spectrum, 60, 250, sampleRate),
+        lowMid: this.getBandEnergy(spectrum, 250, 500, sampleRate),
+        mid: this.getBandEnergy(spectrum, 500, 1000, sampleRate),
+        highMid: this.getBandEnergy(spectrum, 1000, 2000, sampleRate),
+        upperMid: this.getBandEnergy(spectrum, 2000, 4000, sampleRate),
+        presence: this.getBandEnergy(spectrum, 4000, 6000, sampleRate),
+        brilliance: this.getBandEnergy(spectrum, 6000, 12000, sampleRate),
+        
+        // NEW: Peak frequencies for better discrimination
+        peakFreq1: this.findPeakFrequency(spectrum, sampleRate, 0, sampleRate / 4),
+        peakFreq2: this.findPeakFrequency(spectrum, sampleRate, sampleRate / 4, sampleRate / 2),
+        
+        // NEW: Spectral contrast between bands
+        spectralContrast: this.calculateSpectralContrast(spectrum)
       };
       
       fingerprint.push(features);
@@ -195,7 +198,59 @@ class AudioFingerprint {
     return fingerprint;
   }
   
-  // Normalize audio to [-1, 1] range to reduce amplitude variations
+  // NEW: Spectral flatness (Wiener entropy) - distinguishes tones from noise
+  calculateSpectralFlatness(spectrum) {
+    let geometricMean = 0;
+    let arithmeticMean = 0;
+    let count = 0;
+    
+    for (let i = 0; i < spectrum.length; i++) {
+      if (spectrum[i] > 0) {
+        geometricMean += Math.log(spectrum[i]);
+        arithmeticMean += spectrum[i];
+        count++;
+      }
+    }
+    
+    if (count === 0) return 0;
+    
+    geometricMean = Math.exp(geometricMean / count);
+    arithmeticMean = arithmeticMean / count;
+    
+    return arithmeticMean > 0 ? geometricMean / arithmeticMean : 0;
+  }
+  
+  // NEW: Find dominant frequency in a range
+  findPeakFrequency(spectrum, sampleRate, lowFreq, highFreq) {
+    const nyquist = sampleRate / 2;
+    const lowBin = Math.floor((lowFreq / nyquist) * spectrum.length);
+    const highBin = Math.ceil((highFreq / nyquist) * spectrum.length);
+    
+    let maxMag = 0;
+    let peakBin = lowBin;
+    
+    for (let i = lowBin; i < Math.min(highBin, spectrum.length); i++) {
+      if (spectrum[i] > maxMag) {
+        maxMag = spectrum[i];
+        peakBin = i;
+      }
+    }
+    
+    return (peakBin / spectrum.length) * nyquist;
+  }
+  
+  // NEW: Spectral contrast - difference between peaks and valleys
+  calculateSpectralContrast(spectrum) {
+    const sorted = [...spectrum].sort((a, b) => b - a);
+    const topN = Math.floor(spectrum.length * 0.1);
+    const bottomN = Math.floor(spectrum.length * 0.1);
+    
+    const peakMean = sorted.slice(0, topN).reduce((a, b) => a + b, 0) / topN;
+    const valleyMean = sorted.slice(-bottomN).reduce((a, b) => a + b, 0) / bottomN;
+    
+    return valleyMean > 0 ? peakMean / valleyMean : 0;
+  }
+
   normalizeAudio(samples) {
     const maxAmplitude = Math.max(...samples.map(Math.abs));
     if (maxAmplitude === 0) return samples;
@@ -207,7 +262,6 @@ class AudioFingerprint {
     return normalized;
   }
 
-  // Simple high-pass filter to remove low-frequency rumble/noise
   highPassFilter(samples, cutoffFreq, sampleRate) {
     const RC = 1.0 / (cutoffFreq * 2 * Math.PI);
     const dt = 1.0 / sampleRate;
@@ -223,7 +277,6 @@ class AudioFingerprint {
     return filtered;
   }
 
-  // Apply Hann window to reduce spectral leakage
   applyHannWindow(samples) {
     const windowed = new Float32Array(samples.length);
     for (let i = 0; i < samples.length; i++) {
@@ -233,17 +286,13 @@ class AudioFingerprint {
     return windowed;
   }
   
-  // Get energy in a specific frequency band
-  getBandEnergy(spectrum, lowFreq, highFreq, sampleRate, windowSize) {
-    // Map frequency to our reduced spectrum size
-    const spectrumSize = spectrum.length;
+  getBandEnergy(spectrum, lowFreq, highFreq, sampleRate) {
     const nyquist = sampleRate / 2;
-    
-    const lowBin = Math.floor((lowFreq / nyquist) * spectrumSize);
-    const highBin = Math.ceil((highFreq / nyquist) * spectrumSize);
+    const lowBin = Math.floor((lowFreq / nyquist) * spectrum.length);
+    const highBin = Math.ceil((highFreq / nyquist) * spectrum.length);
     
     const startBin = Math.max(0, lowBin);
-    const endBin = Math.min(highBin, spectrumSize);
+    const endBin = Math.min(highBin, spectrum.length);
     
     if (startBin >= endBin) return 0;
     
@@ -255,7 +304,6 @@ class AudioFingerprint {
     return Math.sqrt(energy / (endBin - startBin + 1));
   }
 
-  // Energy (RMS)
   calculateEnergy(samples) {
     let sum = 0;
     for (let i = 0; i < samples.length; i++) {
@@ -264,7 +312,6 @@ class AudioFingerprint {
     return Math.sqrt(sum / samples.length);
   }
 
-  // Zero Crossing Rate - indicates frequency content
   calculateZeroCrossingRate(samples) {
     let crossings = 0;
     for (let i = 1; i < samples.length; i++) {
@@ -276,8 +323,7 @@ class AudioFingerprint {
     return crossings / samples.length;
   }
 
-  // Spectral Centroid - "center of mass" of spectrum (brightness)
-  calculateSpectralCentroid(spectrum, sampleRate, windowSize) {
+  calculateSpectralCentroid(spectrum, sampleRate) {
     let weightedSum = 0;
     let sum = 0;
     const nyquist = sampleRate / 2;
@@ -291,7 +337,6 @@ class AudioFingerprint {
     return sum > 0 ? weightedSum / sum : 0;
   }
 
-  // Spectral Flux - measure of how quickly the spectrum changes between frames
   calculateSpectralFluxBetween(spectrum1, spectrum2) {
     let flux = 0;
     const len = Math.min(spectrum1.length, spectrum2.length);
@@ -304,8 +349,7 @@ class AudioFingerprint {
     return Math.sqrt(flux / len);
   }
 
-  // Spectral Rolloff - frequency below which 85% of energy is contained
-  calculateSpectralRolloff(spectrum, sampleRate, windowSize) {
+  calculateSpectralRolloff(spectrum, sampleRate) {
     const totalEnergy = spectrum.reduce((sum, val) => sum + val, 0);
     const threshold = 0.85 * totalEnergy;
     const nyquist = sampleRate / 2;
@@ -321,33 +365,29 @@ class AudioFingerprint {
     return nyquist;
   }
 
-  // Optimized spectrum calculation - only compute important frequency bins
-  simpleFFT(samples) {
+  // IMPROVED: Full FFT without aggressive downsampling
+  computeFullFFT(samples) {
     const N = samples.length;
-    const numBins = Math.min(128, Math.floor(N / 2)); // Only compute first 128 bins
-    const spectrum = new Float32Array(numBins);
+    const spectrum = new Float32Array(Math.floor(N / 2));
     
-    // Pre-compute sine/cosine tables for speed
-    for (let k = 0; k < numBins; k++) {
+    for (let k = 0; k < spectrum.length; k++) {
       let real = 0;
       let imag = 0;
       const freq = (2 * Math.PI * k) / N;
       
-      // Only sample every 4th point for speed (downsampling)
-      for (let n = 0; n < N; n += 4) {
+      // Use all samples, no downsampling
+      for (let n = 0; n < N; n++) {
         const angle = freq * n;
         real += samples[n] * Math.cos(angle);
         imag -= samples[n] * Math.sin(angle);
       }
       
-      // Magnitude
-      spectrum[k] = Math.sqrt(real * real + imag * imag) / (N / 4);
+      spectrum[k] = Math.sqrt(real * real + imag * imag) / N;
     }
     
     return spectrum;
   }
 
-  // Store audio fingerprint with userId
   async storeAudio(audioPath, audioId, userId) {
     const fingerprint = await this.generateFingerprint(audioPath);
     this.database.set(audioId, {
@@ -359,7 +399,6 @@ class AudioFingerprint {
     return fingerprint;
   }
 
-  // Match audio against database (optionally filter by userId)
   async matchAudio(audioPath, threshold = MATCHING_CONFIG.DEFAULT_THRESHOLD, userId = null) {
     const unknownFingerprint = await this.generateFingerprint(audioPath);
     
@@ -368,12 +407,11 @@ class AudioFingerprint {
     let allScores = [];
 
     for (const [audioId, storedData] of this.database) {
-      // Filter by userId if provided
       if (userId && storedData.userId !== userId) {
         continue;
       }
       
-      const storedFingerprint = storedData.fingerprint || storedData; // Handle old format
+      const storedFingerprint = storedData.fingerprint || storedData;
       const score = this.compareFingerprints(unknownFingerprint, storedFingerprint);
       
       allScores.push({ 
@@ -388,10 +426,8 @@ class AudioFingerprint {
       }
     }
 
-    // Sort all scores for debugging
     allScores.sort((a, b) => b.score - a.score);
     
-    // IMPROVEMENT: Better logging for debugging
     if (MATCHING_CONFIG.LOG_MATCHING) {
       console.log('\n🔍 MATCHING RESULTS:');
       console.log(`  Threshold: ${(threshold * 100).toFixed(1)}%`);
@@ -415,89 +451,108 @@ class AudioFingerprint {
     return { match: null, confidence: bestScore, allScores };
   }
 
-  // Compare two fingerprints using multiple features
+  // COMPLETELY REWRITTEN: Stricter comparison with temporal consistency
   compareFingerprints(fp1, fp2) {
-    const len = Math.min(fp1.length, fp2.length);
+    // Require minimum overlap
+    const minLen = Math.min(fp1.length, fp2.length);
+    if (minLen < 10) return 0; // Too short to reliably compare
     
-    // IMPROVEMENT: Try sliding window comparison to find best match
-    // This handles cases where recording started at different times
-    let bestScore = 0;
+    // CHANGED: No more sliding window - require proper alignment
+    // This prevents matching random portions of different sounds
+    const score = this.compareFingerprintsAligned(fp1, fp2);
     
-    // Check zero offset first (exact alignment)
-    bestScore = this.compareFingerprintsWithOffset(fp1, fp2, 0);
+    // Length penalty for very different durations
+    const lengthRatio = minLen / Math.max(fp1.length, fp2.length);
+    const lengthPenalty = lengthRatio < 0.7 ? 0.85 : 1.0;
     
-    // IMPROVEMENT: More comprehensive offset search (10% of length)
-    const maxOffset = Math.min(20, Math.floor(len * 0.1));
-    
-    // Try smaller step size for better alignment
-    for (let offset = -maxOffset; offset <= maxOffset; offset += 2) {
-      if (offset === 0) continue; // Already checked
-      const score = this.compareFingerprintsWithOffset(fp1, fp2, offset);
-      bestScore = Math.max(bestScore, score);
-    }
-    
-    // IMPROVEMENT: Boost score if both fingerprints are similar length
-    const lengthRatio = Math.min(fp1.length, fp2.length) / Math.max(fp1.length, fp2.length);
-    const lengthBonus = lengthRatio > 0.8 ? 1.0 : 0.95; // Small penalty for very different lengths
-    
-    return bestScore * lengthBonus;
+    return score * lengthPenalty;
   }
 
-  compareFingerprintsWithOffset(fp1, fp2, offset) {
-    const len = Math.min(fp1.length, fp2.length) - Math.abs(offset);
-    if (len <= 0) return 0;
+  // NEW: Strict aligned comparison with temporal consistency requirement
+  compareFingerprintsAligned(fp1, fp2) {
+    const len = Math.min(fp1.length, fp2.length);
     
-    let totalSimilarity = 0;
-    const start1 = Math.max(0, offset);
-    const start2 = Math.max(0, -offset);
-    
-    // IMPROVEMENT: Focus on relative patterns rather than absolute values
-    // De-emphasize energy (affected by volume) and emphasize spectral shape
+    // NEW: Stricter feature weights emphasizing spectral characteristics
     const weights = {
-      energy: 0.02,           // Less weight - volume varies
-      zcr: 0.04,
-      spectralCentroid: 0.08, // More weight - robust feature
-      spectralFlux: 0.06,     // More weight - temporal pattern
-      spectralRolloff: 0.06,  // More weight - spectral shape
-      // Frequency bands - relative energy distribution is key
-      subBass: 0.11,
-      bass: 0.13,
-      lowMid: 0.12,
-      mid: 0.14,
-      highMid: 0.11,
-      presence: 0.08,
-      brilliance: 0.05
+      // De-emphasize energy (too volume-dependent)
+      energy: 0.01,
+      zcr: 0.03,
+      
+      // Emphasize spectral shape features
+      spectralCentroid: 0.12,
+      spectralFlux: 0.10,
+      spectralRolloff: 0.10,
+      spectralFlatness: 0.08,      // NEW
+      spectralContrast: 0.08,      // NEW
+      
+      // Frequency bands - the spectral "signature"
+      subBass: 0.06,
+      bass: 0.08,
+      lowMid: 0.07,
+      mid: 0.08,
+      highMid: 0.06,
+      upperMid: 0.05,
+      presence: 0.04,
+      brilliance: 0.02,
+      
+      // Peak frequencies are very discriminative
+      peakFreq1: 0.01,
+      peakFreq2: 0.01
     };
 
+    let frameSimilarities = [];
+    
     for (let i = 0; i < len; i++) {
-      const f1 = fp1[start1 + i];
-      const f2 = fp2[start2 + i];
+      const f1 = fp1[i];
+      const f2 = fp2[i];
       
-      // IMPROVEMENT: More forgiving comparison with logarithmic scaling
+      let frameSimilarity = 0;
+      
       for (const [feature, weight] of Object.entries(weights)) {
         const v1 = f1[feature] || 0;
         const v2 = f2[feature] || 0;
         
-        // Use logarithmic scaling for better perceptual matching
-        const log1 = Math.log10(Math.abs(v1) + 1);
-        const log2 = Math.log10(Math.abs(v2) + 1);
+        // CHANGED: Much stricter comparison
+        let similarity = 0;
         
-        const maxVal = Math.max(log1, log2, 0.01);
-        const normalizedDiff = Math.abs(log1 - log2) / maxVal;
+        if (feature.startsWith('peakFreq')) {
+          // For peak frequencies, require very close match
+          const maxFreq = Math.max(v1, v2, 1);
+          const freqDiff = Math.abs(v1 - v2);
+          similarity = Math.exp(-freqDiff / (maxFreq * 0.1)); // Within 10% of frequency
+        } else {
+          // For other features, use stricter exponential decay
+          const maxVal = Math.max(Math.abs(v1), Math.abs(v2), 0.001);
+          const normalizedDiff = Math.abs(v1 - v2) / maxVal;
+          
+          // CHANGED: Much stricter - was 0.8, now 2.0
+          similarity = Math.exp(-normalizedDiff * 2.0);
+        }
         
-        // IMPROVEMENT: Less strict exponential - more forgiving to minor variations
-        // Reduced from 1.5 to 0.8 for more tolerance
-        const similarity = Math.exp(-normalizedDiff * 0.8);
-        
-        totalSimilarity += similarity * weight;
+        frameSimilarity += similarity * weight;
+      }
+      
+      frameSimilarities.push(frameSimilarity);
+    }
+    
+    // IMPROVED: Require temporal consistency
+    if (MATCHING_CONFIG.REQUIRE_TEMPORAL_CONSISTENCY) {
+      // Count how many frames are "good matches" (>0.7 similarity)
+      const goodFrames = frameSimilarities.filter(s => s > 0.7).length;
+      const consistencyRatio = goodFrames / frameSimilarities.length;
+      
+      // Require at least 60% of frames to match well
+      if (consistencyRatio < MATCHING_CONFIG.MIN_CONSISTENT_FRAMES) {
+        // Apply heavy penalty for inconsistent matching
+        const avgSimilarity = frameSimilarities.reduce((a, b) => a + b, 0) / len;
+        return avgSimilarity * 0.5; // 50% penalty
       }
     }
-
-    // Average similarity across all frames
-    return totalSimilarity / len;
+    
+    // Return average similarity across all frames
+    return frameSimilarities.reduce((a, b) => a + b, 0) / len;
   }
 
-  // Get all stored audio IDs (optionally filter by userId)
   getAllAudioIds(userId = null) {
     if (userId) {
       const filtered = [];
@@ -511,16 +566,13 @@ class AudioFingerprint {
     return Array.from(this.database.keys());
   }
 
-  // Get all fingerprints with full details (optionally filter by userId)
   getAllFingerprints(userId = null) {
     const results = [];
     for (const [audioId, storedData] of this.database) {
-      // Filter by userId if provided
       if (userId && storedData.userId !== userId) {
         continue;
       }
 
-      // Handle both old format (just fingerprint) and new format (object with userId)
       const fingerprintData = storedData.fingerprint || storedData;
       const userData = storedData.userId || null;
       const timestamp = storedData.timestamp || null;
@@ -535,18 +587,15 @@ class AudioFingerprint {
     return results;
   }
 
-  // Delete audio fingerprint
   deleteAudio(audioId) {
     return this.database.delete(audioId);
   }
 
-  // Save database to file
   saveDatabase(filepath) {
     const data = JSON.stringify(Array.from(this.database.entries()));
     fs.writeFileSync(filepath, data);
   }
 
-  // Load database from file
   loadDatabase(filepath) {
     if (fs.existsSync(filepath)) {
       const data = fs.readFileSync(filepath, 'utf8');
@@ -561,13 +610,11 @@ const fingerprinter = new AudioFingerprint();
 const FINGERPRINTS_DIR = path.join(__dirname, 'user_fingerprints');
 const DB_PATH = path.join(FINGERPRINTS_DIR, 'fingerprints.json');
 
-// Create user_fingerprints directory if it doesn't exist
 if (!fs.existsSync(FINGERPRINTS_DIR)) {
   fs.mkdirSync(FINGERPRINTS_DIR, { recursive: true });
   console.log('Created user_fingerprints directory');
 }
 
-// Load existing database on startup
 fingerprinter.loadDatabase(DB_PATH);
 
 // ============================
@@ -582,13 +629,11 @@ async function sendPushNotification(userId, title, body, data = {}) {
     return { success: false, error: 'No push token registered' };
   }
 
-  // Check that the token is valid
   if (!Expo.isExpoPushToken(pushToken)) {
     console.error(`Push token ${pushToken} is not a valid Expo push token`);
     return { success: false, error: 'Invalid push token' };
   }
 
-  // Construct the notification message
   const message = {
     to: pushToken,
     sound: 'default',
@@ -627,10 +672,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// POST: Store an audio fingerprint
-// curl -X POST http://localhost:3000/api/audio/fingerprint \
-//   -H "Content-Type: application/json" \
-//   -d '{"audioFilePath": "./recorded_fingerprints/test.mp3", "audioId": "song2", "userId": "johns-iphone-abc123"}'
 app.post('/api/audio/fingerprint', async (req, res) => {
   try {
     const { audioFilePath, audioId, userId } = req.body;
@@ -663,8 +704,6 @@ app.post('/api/audio/fingerprint', async (req, res) => {
   }
 });
 
-// POST: Upload and fingerprint audio file
-// This endpoint accepts a file upload from the mobile app
 app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
   try {
     if (!req.file) {
@@ -674,7 +713,6 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
     const { audioId, userId } = req.body;
 
     if (!audioId || !userId) {
-      // Clean up uploaded file if validation fails
       fs.unlinkSync(req.file.path);
       return res.status(400).json({ 
         error: 'audioId and userId are required' 
@@ -684,7 +722,6 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
     const audioFilePath = req.file.path;
     console.log(`📤 Received audio upload: ${req.file.filename} from user: ${userId}`);
 
-    // Convert to MP3 if not already MP3
     let mp3FilePath = audioFilePath;
     const fileExtension = path.extname(req.file.filename).toLowerCase();
     
@@ -699,7 +736,6 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
           .audioBitrate('192k')
           .on('end', () => {
             console.log('✅ Conversion to MP3 complete');
-            // Delete original file after successful conversion
             try {
               fs.unlinkSync(audioFilePath);
               console.log(`🗑️  Deleted original file: ${path.basename(audioFilePath)}`);
@@ -716,7 +752,6 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
       });
     }
 
-    // Create fingerprint from MP3 file
     await fingerprinter.storeAudio(mp3FilePath, audioId, userId);
     fingerprinter.saveDatabase(DB_PATH);
 
@@ -730,13 +765,11 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
     });
   } catch (error) {
     console.error('Error processing upload:', error);
-    // Clean up files on error
     if (req.file) {
       try {
         fs.unlinkSync(req.file.path);
       } catch (e) {}
       
-      // Also try to delete MP3 if it was created
       try {
         const mp3Path = req.file.path.replace(path.extname(req.file.path), '.mp3');
         if (fs.existsSync(mp3Path)) {
@@ -751,10 +784,6 @@ app.post('/api/audio/upload', upload.single('audioFile'), async (req, res) => {
   }
 });
 
-// POST: Match unknown audio
-// curl -X POST http://localhost:3000/api/audio/match \
-//   -H "Content-Type: application/json" \
-//   -d '{"audioFilePath": "./recorded_fingerprints/test3.mp3", "threshold": 0.8, "userId": "user123", "matchOwnOnly": true}'
 app.post('/api/audio/match', async (req, res) => {
   try {
     const { audioFilePath, threshold, userId, matchOwnOnly } = req.body;
@@ -771,7 +800,6 @@ app.post('/api/audio/match', async (req, res) => {
       });
     }
 
-    // If matchOwnOnly is true, only match against this user's fingerprints
     const filterUserId = (matchOwnOnly && userId) ? userId : null;
     
     const result = await fingerprinter.matchAudio(
@@ -780,8 +808,9 @@ app.post('/api/audio/match', async (req, res) => {
       filterUserId
     );
 
-    // Send push notification if match found and userId provided
-    if (result && result.match && userId) {
+    // IMPROVED: Only send notification for high-confidence matches
+    if (result && result.match && userId && 
+        result.confidence >= MATCHING_CONFIG.MIN_NOTIFICATION_CONFIDENCE) {
       const confidencePercent = (result.confidence * 100).toFixed(1);
       await sendPushNotification(
         userId,
@@ -821,8 +850,6 @@ app.post('/api/audio/match', async (req, res) => {
   }
 });
 
-// GET: Retrieve all audio fingerprints (optionally filter by userId)
-// curl http://localhost:3000/api/audio/fingerprints?userId=johns-iphone-abc123
 app.get('/api/audio/fingerprints', (req, res) => {
   try {
     const { userId } = req.query;
@@ -843,7 +870,6 @@ app.get('/api/audio/fingerprints', (req, res) => {
   }
 });
 
-// DELETE: Delete an audio fingerprint
 app.delete('/api/audio/fingerprint/:id', (req, res) => {
   try {
     const audioId = req.params.id;
@@ -873,10 +899,6 @@ app.delete('/api/audio/fingerprint/:id', (req, res) => {
 // Push Notification Endpoints
 // ============================
 
-// POST: Register device for push notifications
-// curl -X POST http://localhost:3000/api/notifications/register \
-//   -H "Content-Type: application/json" \
-//   -d '{"userId": "user123", "pushToken": "ExponentPushToken[...]"}'
 app.post('/api/notifications/register', (req, res) => {
   try {
     const { userId, pushToken } = req.body;
@@ -892,7 +914,6 @@ app.post('/api/notifications/register', (req, res) => {
       });
     }
 
-    // Validate the push token
     if (!Expo.isExpoPushToken(pushToken)) {
       console.log('❌ Invalid push token format:', pushToken);
       return res.status(400).json({
@@ -901,9 +922,8 @@ app.post('/api/notifications/register', (req, res) => {
       });
     }
 
-    // Store the push token
     deviceTokens.set(userId, pushToken);
-    saveDeviceTokens(); // Persist to file
+    saveDeviceTokens();
     console.log(`✅ Registered push token for user: ${userId}`);
 
     res.json({
@@ -919,10 +939,6 @@ app.post('/api/notifications/register', (req, res) => {
   }
 });
 
-// POST: Send a test notification
-// curl -X POST http://localhost:3000/api/notifications/test \
-//   -H "Content-Type: application/json" \
-//   -d '{"userId": "user123"}'
 app.post('/api/notifications/test', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -961,7 +977,6 @@ app.post('/api/notifications/test', async (req, res) => {
   }
 });
 
-// GET: List registered devices
 app.get('/api/notifications/devices', (req, res) => {
   try {
     const devices = Array.from(deviceTokens.keys());
@@ -979,15 +994,13 @@ app.get('/api/notifications/devices', (req, res) => {
   }
 });
 
-// DELETE: Remove a specific device
-// curl -X DELETE http://localhost:3000/api/notifications/device/johns-iphone-abc123
 app.delete('/api/notifications/device/:userId', (req, res) => {
   try {
     const { userId } = req.params;
     
     if (deviceTokens.has(userId)) {
       deviceTokens.delete(userId);
-      saveDeviceTokens(); // Persist to file
+      saveDeviceTokens();
       console.log(`🗑️ Removed device: ${userId}`);
       res.json({
         success: true,
@@ -1007,13 +1020,11 @@ app.delete('/api/notifications/device/:userId', (req, res) => {
   }
 });
 
-// DELETE: Clear all registered devices
-// curl -X DELETE http://localhost:3000/api/notifications/devices/clear
 app.delete('/api/notifications/devices/clear', (req, res) => {
   try {
     const count = deviceTokens.size;
     deviceTokens.clear();
-    saveDeviceTokens(); // Persist to file
+    saveDeviceTokens();
     console.log(`🗑️ Cleared all ${count} registered devices`);
     res.json({
       success: true,
@@ -1032,10 +1043,6 @@ app.delete('/api/notifications/devices/clear', (req, res) => {
 // Twilio Alert Endpoints
 // ============================
 
-// POST: Send check-in alert (I'm OK)
-// curl -X POST http://localhost:3000/api/alerts/checkin \
-//   -H "Content-Type: application/json" \
-//   -d '{"userId": "user123", "caregiverName": "John Doe", "caregiverPhone": "555-123-4567"}'
 app.post('/api/alerts/checkin', async (req, res) => {
   try {
     const { userId, firstName, caregiverName, caregiverPhone } = req.body;
@@ -1070,9 +1077,6 @@ app.post('/api/alerts/checkin', async (req, res) => {
       });
     }
     
-    // TODO: Update today's status in database
-    // TODO: Cancel any scheduled alerts
-    
   } catch (error) {
     console.error('Error in checkin endpoint:', error);
     res.status(500).json({ 
@@ -1082,10 +1086,6 @@ app.post('/api/alerts/checkin', async (req, res) => {
   }
 });
 
-// POST: Send emergency alert (I Need Help)
-// curl -X POST http://localhost:3000/api/alerts/emergency \
-//   -H "Content-Type: application/json" \
-//   -d '{"userId": "user123", "caregiverName": "John Doe", "caregiverPhone": "555-123-4567"}'
 app.post('/api/alerts/emergency', async (req, res) => {
   try {
     const { userId, firstName, caregiverName, caregiverPhone } = req.body;
@@ -1108,7 +1108,6 @@ app.post('/api/alerts/emergency', async (req, res) => {
     if (result.success) {
       console.log(`🚨 EMERGENCY SMS sent to ${caregiverName} (${formattedPhone})`);
       
-      // Also send push notification if possible
       if (userId) {
         await sendPushNotification(
           userId,
@@ -1131,8 +1130,6 @@ app.post('/api/alerts/emergency', async (req, res) => {
       });
     }
     
-    // TODO: Log emergency event in database with high priority flag
-    
   } catch (error) {
     console.error('Error in emergency endpoint:', error);
     res.status(500).json({ 
@@ -1142,12 +1139,10 @@ app.post('/api/alerts/emergency', async (req, res) => {
   }
 });
 
-// Get local network IP address
 function getLocalIpAddress() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
-      // Skip internal and non-IPv4 addresses
       if (iface.family === 'IPv4' && !iface.internal) {
         return iface.address;
       }
@@ -1156,7 +1151,6 @@ function getLocalIpAddress() {
   return 'localhost';
 }
 
-// Simple endpoint to save triggered audio (no fingerprinting)
 app.post('/api/audio/trigger', upload.single('audioFile'), async (req, res) => {
   try {
     if (!req.file) {
@@ -1167,7 +1161,6 @@ app.post('/api/audio/trigger', upload.single('audioFile'), async (req, res) => {
 
     console.log(`🔔 Trigger received: ${req.file.filename} from user: ${userId || 'unknown'}`);
 
-    // Just save the file, no processing
     res.status(200).json({ 
       success: true,
       message: 'Trigger audio saved',
