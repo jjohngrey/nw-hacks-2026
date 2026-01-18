@@ -62,7 +62,7 @@ export default function App() {
       timesDetected: 0,
       enabled: true,
       audioData,
-      audioUri, // Store the local URI for playback
+      audioUri, 
     };
     setSavedSounds((prev) => [newSound, ...prev]);
   };
