@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "what-was-that-app",
+    "name": "what-was-that",
     "slug": "what-was-that-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -38,11 +38,27 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#E6F4FE",
+          "sounds": [],
+          "androidMode": "default",
+          "androidCollapsedTitle": "Audio Match"
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0e25b1b1-8302-4362-bd74-09e2a2429eb1"
+      }
     }
   }
 }
