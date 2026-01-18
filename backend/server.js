@@ -229,26 +229,40 @@ class AudioFingerprint {
     return spectrum;
   }
 
-  // Store audio fingerprint
-  async storeAudio(audioPath, audioId) {
+  // Store audio fingerprint with userId
+  async storeAudio(audioPath, audioId, userId) {
     const fingerprint = await this.generateFingerprint(audioPath);
-    this.database.set(audioId, fingerprint);
-    console.log(`Stored fingerprint for: ${audioId}`);
+    this.database.set(audioId, {
+      fingerprint,
+      userId,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`Stored fingerprint for: ${audioId} (user: ${userId})`);
     return fingerprint;
   }
 
-  // Match audio against database
-  async matchAudio(audioPath, threshold = 0.85) {
+  // Match audio against database (optionally filter by userId)
+  async matchAudio(audioPath, threshold = 0.85, userId = null) {
     const unknownFingerprint = await this.generateFingerprint(audioPath);
     
     let bestMatch = null;
     let bestScore = 0;
     let allScores = [];
 
-    for (const [audioId, storedFingerprint] of this.database) {
+    for (const [audioId, storedData] of this.database) {
+      // Filter by userId if provided
+      if (userId && storedData.userId !== userId) {
+        continue;
+      }
+      
+      const storedFingerprint = storedData.fingerprint || storedData; // Handle old format
       const score = this.compareFingerprints(unknownFingerprint, storedFingerprint);
       
-      allScores.push({ audioId, score });
+      allScores.push({ 
+        audioId, 
+        score,
+        userId: storedData.userId || 'unknown'
+      });
       
       if (score > bestScore) {
         bestScore = score;
@@ -336,8 +350,17 @@ class AudioFingerprint {
     return totalSimilarity / len;
   }
 
-  // Get all stored audio IDs
-  getAllAudioIds() {
+  // Get all stored audio IDs (optionally filter by userId)
+  getAllAudioIds(userId = null) {
+    if (userId) {
+      const filtered = [];
+      for (const [audioId, storedData] of this.database) {
+        if (storedData.userId === userId) {
+          filtered.push(audioId);
+        }
+      }
+      return filtered;
+    }
     return Array.from(this.database.keys());
   }
 
@@ -423,7 +446,10 @@ app.get('/', (req, res) => {
       'GET /api/audio/fingerprints': 'Get all stored fingerprints',
       'DELETE /api/audio/fingerprint/:id': 'Delete a fingerprint',
       'POST /api/notifications/register': 'Register device for push notifications',
-      'POST /api/notifications/test': 'Send a test notification'
+      'POST /api/notifications/test': 'Send a test notification',
+      'GET /api/notifications/devices': 'List all registered devices',
+      'DELETE /api/notifications/device/:userId': 'Remove a specific device',
+      'DELETE /api/notifications/devices/clear': 'Clear all registered devices'
     }
   });
 });
@@ -431,14 +457,14 @@ app.get('/', (req, res) => {
 // POST: Store an audio fingerprint
 // curl -X POST http://localhost:3000/api/audio/fingerprint \
 //   -H "Content-Type: application/json" \
-//   -d '{"audioFilePath": "./recorded_fingerprints/test.mp3", "audioId": "song2"}'
+//   -d '{"audioFilePath": "./recorded_fingerprints/test.mp3", "audioId": "song2", "userId": "johns-iphone-abc123"}'
 app.post('/api/audio/fingerprint', async (req, res) => {
   try {
-    const { audioFilePath, audioId } = req.body;
+    const { audioFilePath, audioId, userId } = req.body;
 
-    if (!audioFilePath || !audioId) {
+    if (!audioFilePath || !audioId || !userId) {
       return res.status(400).json({ 
-        error: 'audioFilePath and audioId are required' 
+        error: 'audioFilePath, audioId, and userId are required' 
       });
     }
 
@@ -448,12 +474,12 @@ app.post('/api/audio/fingerprint', async (req, res) => {
       });
     }
 
-    await fingerprinter.storeAudio(audioFilePath, audioId);
+    await fingerprinter.storeAudio(audioFilePath, audioId, userId);
     fingerprinter.saveDatabase(DB_PATH);
 
     res.json({ 
       success: true, 
-      message: `Fingerprint stored for: ${audioId}` 
+      message: `Fingerprint stored for: ${audioId} (user: ${userId})` 
     });
   } catch (error) {
     console.error('Error storing fingerprint:', error);
@@ -467,10 +493,10 @@ app.post('/api/audio/fingerprint', async (req, res) => {
 // POST: Match unknown audio
 // curl -X POST http://localhost:3000/api/audio/match \
 //   -H "Content-Type: application/json" \
-//   -d '{"audioFilePath": "./recorded_fingerprints/test3.mp3", "threshold": 0.8, "userId": "user123"}'
+//   -d '{"audioFilePath": "./recorded_fingerprints/test3.mp3", "threshold": 0.8, "userId": "user123", "matchOwnOnly": true}'
 app.post('/api/audio/match', async (req, res) => {
   try {
-    const { audioFilePath, threshold, userId } = req.body;
+    const { audioFilePath, threshold, userId, matchOwnOnly } = req.body;
 
     if (!audioFilePath) {
       return res.status(400).json({ 
@@ -484,9 +510,13 @@ app.post('/api/audio/match', async (req, res) => {
       });
     }
 
+    // If matchOwnOnly is true, only match against this user's fingerprints
+    const filterUserId = (matchOwnOnly && userId) ? userId : null;
+    
     const result = await fingerprinter.matchAudio(
       audioFilePath, 
-      threshold || 0.85
+      threshold || 0.85,
+      filterUserId
     );
 
     // Send push notification if match found and userId provided
@@ -530,14 +560,17 @@ app.post('/api/audio/match', async (req, res) => {
   }
 });
 
-// GET: Retrieve all audio fingerprints
+// GET: Retrieve all audio fingerprints (optionally filter by userId)
+// curl http://localhost:3000/api/audio/fingerprints?userId=johns-iphone-abc123
 app.get('/api/audio/fingerprints', (req, res) => {
   try {
-    const audioIds = fingerprinter.getAllAudioIds();
+    const { userId } = req.query;
+    const audioIds = fingerprinter.getAllAudioIds(userId);
     res.json({
       success: true,
       count: audioIds.length,
-      audioIds: audioIds
+      audioIds: audioIds,
+      filteredBy: userId || 'none'
     });
   } catch (error) {
     console.error('Error retrieving fingerprints:', error);
@@ -678,6 +711,53 @@ app.get('/api/notifications/devices', (req, res) => {
     console.error('Error listing devices:', error);
     res.status(500).json({
       error: 'Failed to list devices',
+      details: error.message
+    });
+  }
+});
+
+// DELETE: Remove a specific device
+// curl -X DELETE http://localhost:3000/api/notifications/device/johns-iphone-abc123
+app.delete('/api/notifications/device/:userId', (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (deviceTokens.has(userId)) {
+      deviceTokens.delete(userId);
+      console.log(`🗑️ Removed device: ${userId}`);
+      res.json({
+        success: true,
+        message: `Device removed: ${userId}`
+      });
+    } else {
+      res.status(404).json({
+        error: `Device not found: ${userId}`
+      });
+    }
+  } catch (error) {
+    console.error('Error removing device:', error);
+    res.status(500).json({
+      error: 'Failed to remove device',
+      details: error.message
+    });
+  }
+});
+
+// DELETE: Clear all registered devices
+// curl -X DELETE http://localhost:3000/api/notifications/devices/clear
+app.delete('/api/notifications/devices/clear', (req, res) => {
+  try {
+    const count = deviceTokens.size;
+    deviceTokens.clear();
+    console.log(`🗑️ Cleared all ${count} registered devices`);
+    res.json({
+      success: true,
+      message: `Cleared ${count} devices`
+    });
+  } catch (error) {
+    console.error('Error clearing devices:', error);
+    res.status(500).json({
+      error: 'Failed to clear devices',
       details: error.message
     });
   }
