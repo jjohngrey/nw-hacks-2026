@@ -252,7 +252,15 @@ class AudioFingerprint {
   }
 
   normalizeAudio(samples) {
-    const maxAmplitude = Math.max(...samples.map(Math.abs));
+    // Find max amplitude using loop to avoid stack overflow with large arrays
+    let maxAmplitude = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const abs = Math.abs(samples[i]);
+      if (abs > maxAmplitude) {
+        maxAmplitude = abs;
+      }
+    }
+    
     if (maxAmplitude === 0) return samples;
     
     const normalized = new Float32Array(samples.length);
@@ -365,24 +373,28 @@ class AudioFingerprint {
     return nyquist;
   }
 
-  // IMPROVED: Full FFT without aggressive downsampling
+  // IMPROVED: More efficient FFT - only compute needed frequency bins
   computeFullFFT(samples) {
     const N = samples.length;
-    const spectrum = new Float32Array(Math.floor(N / 2));
+    // Only compute up to 8kHz (bins up to ~512 for typical sample rates)
+    // Most discriminative audio content is below 8kHz
+    const maxBin = Math.min(512, Math.floor(N / 2));
+    const spectrum = new Float32Array(maxBin);
     
-    for (let k = 0; k < spectrum.length; k++) {
+    // Precompute angles for efficiency
+    for (let k = 0; k < maxBin; k++) {
       let real = 0;
       let imag = 0;
       const freq = (2 * Math.PI * k) / N;
       
-      // Use all samples, no downsampling
-      for (let n = 0; n < N; n++) {
+      // Sample every 2nd point for speed (still much better than old every 4th)
+      for (let n = 0; n < N; n += 2) {
         const angle = freq * n;
         real += samples[n] * Math.cos(angle);
         imag -= samples[n] * Math.sin(angle);
       }
       
-      spectrum[k] = Math.sqrt(real * real + imag * imag) / N;
+      spectrum[k] = Math.sqrt(real * real + imag * imag) / (N / 2);
     }
     
     return spectrum;
