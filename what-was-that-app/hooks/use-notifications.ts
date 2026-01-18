@@ -16,8 +16,25 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// localhost:3000
-const BACKEND_URL = 'http://128.189.223.21:3000'; // Your computer's IP address
+// Automatically detect IP from Expo dev server
+const getBackendUrl = () => {
+  // In development with Expo Go, get the host from the manifest
+  const hostUri = Constants.expoConfig?.hostUri;
+  
+  if (hostUri) {
+    // hostUri is like "192.168.1.5:8081" - extract just the IP
+    const host = hostUri.split(':')[0];
+    return `http://${host}:3000`;
+  }
+  
+  // Fallback to localhost (for simulators/emulators)
+  return 'http://localhost:3000';
+};
+
+const BACKEND_URL = getBackendUrl();
+
+// Log the backend URL for debugging
+console.log('🌐 Backend URL:', BACKEND_URL);
 
 export function useNotifications(userId: string = 'default-user') {
   const [expoPushToken, setExpoPushToken] = useState<string | undefined>();

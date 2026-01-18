@@ -4,6 +4,7 @@ const fs = require('fs');
 const { decode } = require('wav-decoder');
 const path = require('path');
 const { Expo } = require('expo-server-sdk');
+const os = require('os');
 
 const app = express();
 const PORT = 3000;
@@ -682,9 +683,26 @@ app.get('/api/notifications/devices', (req, res) => {
   }
 });
 
+// Get local network IP address
+function getLocalIpAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip internal and non-IPv4 addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
 app.listen(PORT, '0.0.0.0', () => {
+  const localIp = getLocalIpAddress();
+  
   console.log(`🎵 Audio Fingerprinting Server running!`);
   console.log(`   Local:   http://localhost:${PORT}`);
-  console.log(`   Network: http://128.189.223.21:${PORT}`);
+  console.log(`   Network: http://${localIp}:${PORT}`);
   console.log(`📚 Loaded ${fingerprinter.database.size} fingerprints from database`);
+  console.log(`\n💡 Use the Network URL when testing on a physical device`);
 });
