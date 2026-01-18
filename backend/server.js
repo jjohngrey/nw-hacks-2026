@@ -426,6 +426,30 @@ class AudioFingerprint {
     return Array.from(this.database.keys());
   }
 
+  // Get all fingerprints with full details (optionally filter by userId)
+  getAllFingerprints(userId = null) {
+    const results = [];
+    for (const [audioId, storedData] of this.database) {
+      // Filter by userId if provided
+      if (userId && storedData.userId !== userId) {
+        continue;
+      }
+
+      // Handle both old format (just fingerprint) and new format (object with userId)
+      const fingerprintData = storedData.fingerprint || storedData;
+      const userData = storedData.userId || null;
+      const timestamp = storedData.timestamp || null;
+
+      results.push({
+        audioId,
+        userId: userData,
+        timestamp,
+        fingerprintLength: Array.isArray(fingerprintData) ? fingerprintData.length : 0
+      });
+    }
+    return results;
+  }
+
   // Delete audio fingerprint
   deleteAudio(audioId) {
     return this.database.delete(audioId);
@@ -715,11 +739,12 @@ app.post('/api/audio/match', async (req, res) => {
 app.get('/api/audio/fingerprints', (req, res) => {
   try {
     const { userId } = req.query;
-    const audioIds = fingerprinter.getAllAudioIds(userId);
+    const fingerprints = fingerprinter.getAllFingerprints(userId);
+    
     res.json({
       success: true,
-      count: audioIds.length,
-      audioIds: audioIds,
+      count: fingerprints.length,
+      fingerprints: fingerprints,
       filteredBy: userId || 'none'
     });
   } catch (error) {

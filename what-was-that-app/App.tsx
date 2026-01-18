@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { View, StyleSheet } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import axios from "axios";
+import Constants from "expo-constants";
 
 import HomeScreen from "./app/components/HomeScreen";
 import SavedSoundsScreen from "./app/components/SavedSoundsScreen";
@@ -22,37 +24,82 @@ export interface SavedSound {
   audioUri?: string; // Local URI for playback
 }
 
+// Get backend URL
+const PRODUCTION_BACKEND = 'http://155.138.215.227:3000';
+
+const getBackendUrl = () => {
+  if (PRODUCTION_BACKEND) {
+    return PRODUCTION_BACKEND;
+  }
+  const hostUri = Constants.expoConfig?.hostUri;
+  if (hostUri) {
+    const ip = hostUri.split(":")[0];
+    return `http://${ip}:3000`;
+  }
+  return "http://localhost:3000";
+};
+
 export default function App() {
   // Setup push notifications
   const { expoPushToken, userId } = useNotifications();
   
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
-  const [savedSounds, setSavedSounds] = useState<SavedSound[]>([
-    {
-      id: "1",
-      label: "Door knock",
-      dateAdded: "3 days ago",
-      timesDetected: 12,
-      enabled: true,
-      audioData: "audio-1704067200000",
-    },
-    {
-      id: "2",
-      label: "Microwave beep",
-      dateAdded: "1 week ago",
-      timesDetected: 28,
-      enabled: true,
-      audioData: "audio-1703462400000",
-    },
-    {
-      id: "3",
-      label: "Dog bark",
-      dateAdded: "2 weeks ago",
-      timesDetected: 5,
-      enabled: false,
-      audioData: "audio-1702857600000",
-    },
-  ]);
+  const [savedSounds, setSavedSounds] = useState<SavedSound[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Fetch fingerprints from backend
+  const fetchFingerprints = async () => {
+    if (!userId) {
+      console.log('No userId yet, skipping fetch');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const backendUrl = getBackendUrl();
+      console.log('📥 Fetching fingerprints for user:', userId);
+
+      const response = await axios.get(`${backendUrl}/api/audio/fingerprints`, {
+        params: { userId }
+      });
+
+      if (response.data.success) {
+        const fingerprints = response.data.fingerprints;
+        console.log(`✅ Fetched ${fingerprints.length} fingerprints`);
+
+        // Transform backend data to SavedSound format
+        const sounds: SavedSound[] = fingerprints.map((fp: any) => ({
+          id: fp.audioId,
+          label: fp.audioId, // Use audioId as label (or fetch from metadata if you store it)
+          dateAdded: fp.timestamp ? new Date(fp.timestamp).toLocaleDateString() : 'Unknown',
+          timesDetected: 0, // Could track this in backend
+          enabled: true,
+          audioData: fp.audioId,
+          audioUri: undefined, // Not stored in backend
+        }));
+
+        setSavedSounds(sounds);
+      }
+    } catch (error: any) {
+      console.error('❌ Error fetching fingerprints:', error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fetch fingerprints when userId is available
+  useEffect(() => {
+    if (userId) {
+      fetchFingerprints();
+    }
+  }, [userId]);
+
+  // Refresh fingerprints when navigating to sounds screen
+  useEffect(() => {
+    if (currentScreen === 'sounds' && userId) {
+      fetchFingerprints();
+    }
+  }, [currentScreen]);
 
   const handleSaveSound = (label: string, audioData: string, audioUri: string) => {
     const newSound: SavedSound = {
@@ -65,6 +112,9 @@ export default function App() {
       audioUri, 
     };
     setSavedSounds((prev) => [newSound, ...prev]);
+    
+    // Refresh from backend to get the actual stored data
+    setTimeout(() => fetchFingerprints(), 1000);
   };
 
   const handleToggleSound = (id: string) => {
@@ -75,8 +125,25 @@ export default function App() {
     );
   };
 
-  const handleDeleteSound = (id: string) => {
-    setSavedSounds((prev) => prev.filter((sound) => sound.id !== id));
+  const handleDeleteSound = async (id: string) => {
+    try {
+      const backendUrl = getBackendUrl();
+      console.log('🗑️ Deleting fingerprint:', id);
+
+      // Optimistically remove from UI
+      setSavedSounds((prev) => prev.filter((sound) => sound.id !== id));
+
+      // Delete from backend
+      const response = await axios.delete(`${backendUrl}/api/audio/fingerprint/${id}`);
+      
+      if (response.data.success) {
+        console.log('✅ Deleted from backend');
+      }
+    } catch (error: any) {
+      console.error('❌ Error deleting fingerprint:', error.message);
+      // Refresh to restore if delete failed
+      fetchFingerprints();
+    }
   };
 
   const renderScreen = () => {
