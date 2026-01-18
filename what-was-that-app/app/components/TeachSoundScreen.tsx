@@ -55,18 +55,20 @@ const getBackendUrl = () => {
 };
 
 export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenProps) {
+  const [currentRecording, setCurrentRecording] = useState(1); // 1, 2, or 3
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [customLabel, setCustomLabel] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [waveformAmplitudes, setWaveformAmplitudes] = useState<number[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [allRecordingsComplete, setAllRecordingsComplete] = useState(false);
 
   const recordingRef = useRef<Audio.Recording | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const animationRef = useRef<number | null>(null);
-  const recordingUriRef = useRef<string | null>(null);
+  const recordingUrisRef = useRef<string[]>([]);
 
   // Animations
   const cardScale = useRef(new Animated.Value(0.95)).current;
@@ -124,8 +126,8 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
   }, [recordingState, pulse]);
 
   useEffect(() => {
-    // Fade in label + save button when recorded
-    const shouldShow = recordingState === "recorded";
+    // Fade in label + save button when all recordings complete
+    const shouldShow = allRecordingsComplete;
     Animated.timing(labelFade, {
       toValue: shouldShow ? 1 : 0,
       duration: 200,
@@ -136,7 +138,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       duration: 200,
       useNativeDriver: true,
     }).start();
-  }, [recordingState, labelFade, saveFade]);
+  }, [allRecordingsComplete, labelFade, saveFade]);
 
   useEffect(() => {
     return () => {
@@ -156,10 +158,11 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
     try {
       setRecordingState("recording");
       setRecordingDuration(0);
-      setCustomLabel("");
+      if (currentRecording === 1) {
+        setCustomLabel("");
+      }
       setIsPlaying(false);
       setWaveformAmplitudes([]);
-      recordingUriRef.current = null;
 
       // Start timer
       if (timerRef.current) clearInterval(timerRef.current);
@@ -252,14 +255,30 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       // Stop and get recording URI
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
-      recordingUriRef.current = uri || null;
-
-      // Freeze waveform at current state
+      
       if (uri) {
-        console.log("Recording saved to:", uri);
+        // Store the URI properly
+        const newUris = [...recordingUrisRef.current];
+        newUris[currentRecording - 1] = uri;
+        recordingUrisRef.current = newUris;
+        console.log(`Recording ${currentRecording}/3 saved:`, uri);
+        console.log(`Total recordings so far: ${newUris.filter(Boolean).length}`);
       }
 
       recordingRef.current = null;
+
+      // Move to next recording or finish
+      if (currentRecording < 3) {
+        setTimeout(() => {
+          setCurrentRecording(currentRecording + 1);
+          setRecordingState("idle");
+          setRecordingDuration(0);
+          setWaveformAmplitudes([]);
+        }, 800); // Slightly longer delay to show completion
+      } else {
+        console.log('All 3 recordings complete!');
+        setAllRecordingsComplete(true);
+      }
     } catch (err) {
       console.error("Failed to stop recording", err);
       Alert.alert("Error", "Failed to stop recording.");
@@ -276,8 +295,9 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
           setIsPlaying(false);
         }
       } else {
-        // Start playback
-        if (!recordingUriRef.current) {
+        // Start playback - play the last recorded sample
+        const lastRecordingUri = recordingUrisRef.current[currentRecording - 1];
+        if (!lastRecordingUri) {
           Alert.alert("Error", "No recording available to play.");
           return;
         }
@@ -296,7 +316,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         });
 
         const { sound } = await Audio.Sound.createAsync(
-          { uri: recordingUriRef.current },
+          { uri: lastRecordingUri },
           { 
             shouldPlay: true,
             volume: 1.0, // Maximum volume
@@ -337,7 +357,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
     }
   };
 
-  const uploadToBackend = async (audioUri: string, label: string): Promise<string | null> => {
+  const uploadToBackend = async (label: string): Promise<string | null> => {
     try {
       setIsUploading(true);
       const backendUrl = getBackendUrl();
@@ -351,16 +371,19 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         return null;
       }
 
-      // Create FormData for file upload
+      // Use the first recording for now (until backend supports multi-file upload)
+      const firstRecordingUri = recordingUrisRef.current[0];
+      
+      console.log(`📤 Uploading custom sound: "${label}"`);
+
+      // Create FormData with the first audio file
       const formData = new FormData();
       
-      // Detect file extension
-      const fileExtension = audioUri.split('.').pop() || 'm4a';
+      const fileExtension = firstRecordingUri.split('.').pop() || 'm4a';
       const fileName = `${audioId}-${Date.now()}.${fileExtension}`;
       
-      // Add the audio file
       formData.append('audioFile', {
-        uri: audioUri,
+        uri: firstRecordingUri,
         type: `audio/${fileExtension}`,
         name: fileName,
       } as any);
@@ -369,7 +392,7 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
       formData.append('audioId', audioId);
       formData.append('userId', userId);
 
-      console.log(`📤 Uploading audio: ${fileName} for user: ${userId}`);
+      console.log(`📤 Uploading to: ${backendUrl}/api/audio/upload`);
 
       // Upload to backend using multipart/form-data
       const response = await axios.post(
@@ -379,13 +402,13 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
           headers: {
             'Content-Type': 'multipart/form-data',
           },
-          timeout: 60000, // 60 second timeout for larger files
+          timeout: 60000, // 60 second timeout
         }
       );
 
       if (response.data.success) {
         console.log('✅ Audio uploaded and fingerprinted:', audioId);
-        Alert.alert('Success', `"${label}" has been saved and fingerprinted!`);
+        Alert.alert('Success', `"${label}" has been saved!`);
         return audioId;
       } else {
         throw new Error(response.data.error || 'Upload failed');
@@ -403,28 +426,31 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
   };
 
   const handleSave = async () => {
-    if (!customLabel.trim() || recordingState !== "recorded") {
+    if (!customLabel.trim()) {
       Alert.alert("Error", "Please enter a label for this sound.");
       return;
     }
 
-    if (!recordingUriRef.current) {
-      Alert.alert("Error", "No recording available to save.");
+    const validRecordings = recordingUrisRef.current.filter(Boolean);
+    if (validRecordings.length < 3) {
+      Alert.alert("Error", `Please complete all 3 recordings. You have ${validRecordings.length}/3.`);
       return;
     }
 
     try {
       // Upload to backend and create fingerprint
-      const audioId = await uploadToBackend(recordingUriRef.current, customLabel);
+      const audioId = await uploadToBackend(customLabel);
       
       if (audioId) {
         // Successfully uploaded and fingerprinted
-        await onSave(customLabel, audioId, recordingUriRef.current);
+        const firstRecordingUri = recordingUrisRef.current[0];
+        await onSave(customLabel, audioId, firstRecordingUri);
         onClose();
       } else {
         // Upload failed, but keep the local recording
         const fallbackId = `local-${Date.now()}`;
-        await onSave(customLabel, fallbackId, recordingUriRef.current);
+        const firstRecordingUri = recordingUrisRef.current[0];
+        await onSave(customLabel, fallbackId, firstRecordingUri);
         onClose();
       }
     } catch (err) {
@@ -441,10 +467,12 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
 
   const infoText =
     recordingState === "idle"
-      ? "Record a 3-5 second sample of the sound you want to detect"
+      ? `Record sample ${currentRecording} of 3 - Play the sound you want to detect`
       : recordingState === "recording"
-      ? "Play the chime you want to record"
-      : "Audio is stored for recognition";
+      ? `Recording sample ${currentRecording}/3...`
+      : allRecordingsComplete
+      ? "All 3 samples recorded! Enter a name to save."
+      : `Sample ${currentRecording}/3 recorded! ${currentRecording < 3 ? 'Tap to record next sample.' : ''}`;
 
   const circleColor =
     recordingState === "idle"
@@ -465,6 +493,26 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
 
       {/* Recording Card */}
       <Animated.View style={[styles.card, { transform: [{ scale: cardScale }] }]}>
+        {/* Progress Indicator */}
+        <View style={styles.progressContainer}>
+          {[1, 2, 3].map((num) => (
+            <View
+              key={num}
+              style={[
+                styles.progressCircle,
+                recordingUrisRef.current[num - 1] && styles.progressCircleComplete,
+                currentRecording === num && !allRecordingsComplete && styles.progressCircleActive,
+              ]}
+            >
+              {recordingUrisRef.current[num - 1] ? (
+                <Text style={styles.progressCheckmark}>✓</Text>
+              ) : (
+                <Text style={styles.progressText}>{num}</Text>
+              )}
+            </View>
+          ))}
+        </View>
+
         {/* Record Button */}
         <View style={styles.center}>
           {recordingState === "idle" ? (
@@ -478,69 +526,37 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
               </Pressable>
             </Animated.View>
           ) : (
-            <View style={styles.playbackControls}>
-              <Pressable onPress={togglePlayback} style={[styles.bigCircle, { backgroundColor: circleColor }]}>
-                {isPlaying ? <Pause size={40} color="white" /> : <Play size={40} color="white" />}
-              </Pressable>
-              
-              <Pressable 
-                onPress={() => {
-                  // Reset and start new recording
-                  setRecordingState("idle");
-                  setRecordingDuration(0);
-                  setCustomLabel("");
-                  setIsPlaying(false);
-                  setWaveformAmplitudes([]);
-                  recordingUriRef.current = null;
-                  if (soundRef.current) {
-                    soundRef.current.unloadAsync().catch(console.error);
-                    soundRef.current = null;
-                  }
-                  if (recordingRef.current) {
-                    recordingRef.current.stopAndUnloadAsync().catch(console.error);
-                    recordingRef.current = null;
-                  }
-                  // Immediately start recording again
-                  setTimeout(() => startRecording(), 100);
-                }}
-                style={[styles.refreshBtn, { backgroundColor: COLORS.bgLight }, styles.bigCircle]}
-              >
-                <RefreshCcw size={40} color={COLORS.textPrimary} />
-              </Pressable>
+            /* Recorded state - just show checkmark, no playback controls */
+            <View style={[styles.bigCircle, { backgroundColor: circleColor }]}>
+              <Text style={styles.checkmark}>✓</Text>
             </View>
           )}
         </View>
 
         {/* Status Text */}
         <Text style={styles.statusText}>
-          {recordingState === "idle" && "Tap to record a chime"}
-          {recordingState === "recording" && "Recording..."}
-          {recordingState === "recorded" && (isPlaying ? "Playing..." : "Chime saved")}
+          {recordingState === "idle" && `Tap to record sample ${currentRecording}/3`}
+          {recordingState === "recording" && `Recording sample ${currentRecording}/3...`}
+          {recordingState === "recorded" && !allRecordingsComplete && `Sample ${currentRecording}/3 saved`}
+          {recordingState === "recorded" && allRecordingsComplete && "All samples recorded!"}
         </Text>
 
-        {/* Timer */}
-        {(recordingState === "recording" || recordingState === "recorded") && (
+        {/* Timer - only show during recording */}
+        {recordingState === "recording" && (
           <Text style={styles.timerText}>{formatDuration(recordingDuration)}</Text>
         )}
 
-        {/* Waveform */}
-        {(recordingState === "recording" || recordingState === "recorded") && (
+        {/* Waveform - only show during recording */}
+        {recordingState === "recording" && (
           <View style={styles.waveRow}>
             {waveformAmplitudes.map((amp, idx) => {
               const barHeight = Math.max(6, Math.round(amp * 60));
-              const barColor =
-                recordingState === "recorded"
-                  ? isPlaying
-                    ? COLORS.confirmed
-                    : COLORS.detected
-                  : COLORS.detected;
-
               return (
                 <View
                   key={idx}
                   style={[
                     styles.waveBar,
-                    { height: barHeight, backgroundColor: barColor },
+                    { height: barHeight, backgroundColor: COLORS.detected },
                   ]}
                 />
               );
@@ -549,8 +565,8 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
         )}
       </Animated.View>
 
-      {/* Label Input */}
-      {recordingState === "recorded" && (
+      {/* Label Input - Only show after all 3 recordings */}
+      {allRecordingsComplete && (
         <Animated.View style={[styles.inputBlock, { opacity: labelFade, transform: [{ translateY: labelFade.interpolate({
           inputRange: [0, 1],
           outputRange: [12, 0],
@@ -575,8 +591,8 @@ export default function TeachSoundScreen({ onClose, onSave }: TeachSoundScreenPr
 
       <View style={{ flex: 1 }} />
 
-      {/* Action Buttons - Fixed at bottom */}
-      {recordingState === "recorded" && (
+      {/* Action Buttons - Fixed at bottom - Only show after all 3 recordings */}
+      {allRecordingsComplete && (
         <Animated.View style={[styles.bottomButtonContainer, { opacity: saveFade }]}>
           <Pressable
             onPress={handleSave}
@@ -682,6 +698,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  checkmark: {
+    fontSize: 48,
+    color: "white",
+    fontWeight: "700",
+  },
   refreshBtn: {
     width: 56,
     height: 56,
@@ -723,6 +744,42 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 16,
     color: COLORS.textPrimary,
+  },
+
+  progressContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+    gap: 12,
+  },
+  progressCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.card,
+    borderWidth: 2,
+    borderColor: COLORS.textSecondary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  progressCircleActive: {
+    borderColor: COLORS.detected,
+    borderWidth: 3,
+  },
+  progressCircleComplete: {
+    backgroundColor: COLORS.confirmed,
+    borderColor: COLORS.confirmed,
+  },
+  progressText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.textPrimary,
+  },
+  progressCheckmark: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "white",
   },
 
   infoText: {

@@ -10,7 +10,7 @@ interface HomeScreenProps {
 }
 
 // Get backend URL
-const PRODUCTION_BACKEND = 'http://155.138.215.227:3000';
+const PRODUCTION_BACKEND = 'http://155.138.215.227:3000'; // Vultr production backend
 
 const getBackendUrl = () => {
   if (PRODUCTION_BACKEND) {
@@ -25,11 +25,16 @@ const getBackendUrl = () => {
 };
 
 export default function HomeScreen({ onTeachSound, onViewHistory }: HomeScreenProps) {
+  console.log('🏠 HomeScreen component called');
+  
   const [listening, setListening] = useState(false);
   const [isSendingNotif, setIsSendingNotif] = useState(false);
 
   useEffect(() => {
-    // your existing logic
+    console.log('🏠 HomeScreen mounted');
+    return () => {
+      console.log('🏠 HomeScreen unmounted');
+    };
   }, []);
 
   const sendTestNotification = async () => {
@@ -68,6 +73,8 @@ export default function HomeScreen({ onTeachSound, onViewHistory }: HomeScreenPr
     }
   };
 
+  console.log('🏠 HomeScreen rendering JSX');
+  
   return (
     <View style={styles.container}>
       <View>

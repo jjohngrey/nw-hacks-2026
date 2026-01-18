@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, StyleSheet } from "react-native";
+import { View, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import axios from "axios";
 import Constants from "expo-constants";
@@ -11,7 +11,9 @@ import TeachSoundScreen from "./app/components/TeachSoundScreen";
 import EventHistoryScreen from "./app/components/EventHistoryScreen";
 import SettingsScreen from "./app/components/SettingsScreen";
 import BottomNav from "./app/components/BottomNav";
+import OnboardingFlow from "./app/components/onboarding/OnboardingFlow";
 import { useNotifications } from "./hooks/use-notifications";
+import { checkOnboardingComplete, loadOnboardingData } from "./utils/onboarding-storage";
 
 export type Screen = "home" | "sounds" | "history" | "settings" | "teach";
 
@@ -26,7 +28,7 @@ export interface SavedSound {
 }
 
 // Get backend URL
-const PRODUCTION_BACKEND = 'http://155.138.215.227:3000';
+const PRODUCTION_BACKEND = 'http://155.138.215.227:3000'; // Vultr production backend
 
 const getBackendUrl = () => {
   if (PRODUCTION_BACKEND) {
@@ -47,6 +49,83 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [savedSounds, setSavedSounds] = useState<SavedSound[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(true);
+  const [isCheckingOnboarding, setIsCheckingOnboarding] = useState(true);
+
+  // Debug logging for state changes
+  useEffect(() => {
+    console.log('🔄 App state changed:', { showOnboarding, isCheckingOnboarding });
+  }, [showOnboarding, isCheckingOnboarding]);
+
+  // Check onboarding status on mount
+  useEffect(() => {
+    let isMounted = true;
+    const checkOnboarding = async () => {
+      console.log('🔍 Checking onboarding status...');
+      const isComplete = await checkOnboardingComplete();
+      console.log('✅ Onboarding complete:', isComplete);
+      
+      // If onboarding is complete, load custom sounds from onboarding data
+      if (isComplete) {
+        const onboardingData = await loadOnboardingData();
+        if (onboardingData?.customSounds && onboardingData.customSounds.length > 0) {
+          console.log('📥 Loading custom sounds from onboarding:', onboardingData.customSounds.length);
+          
+          // Save audio URIs to AsyncStorage and create sound objects
+          const customSoundsFromOnboarding = await Promise.all(
+            onboardingData.customSounds.map(async (sound, index) => {
+              // Save the audio URI mapping for playback (now using permanent location)
+              const key = `audioUri_${sound.audioId}`;
+              await AsyncStorage.setItem(key, sound.audioUri);
+              console.log(`💾 Saved audio URI for ${sound.audioId}: ${sound.audioUri}`);
+              
+              return {
+                id: `onboarding-${index}-${Date.now()}`,
+                label: sound.name,
+                dateAdded: "From onboarding",
+                timesDetected: 0,
+                enabled: true,
+                audioData: sound.audioId,
+                audioUri: sound.audioUri, // Now using permanent file location
+              };
+            })
+          );
+          
+          console.log('📋 Custom sounds from onboarding:', customSoundsFromOnboarding.length);
+          setSavedSounds((prev) => [...customSoundsFromOnboarding, ...prev]);
+        }
+      }
+      
+      if (isMounted) {
+        setShowOnboarding(!isComplete);
+        setIsCheckingOnboarding(false);
+      }
+    };
+    checkOnboarding();
+    return () => {
+      isMounted = false;
+    };
+  }, []); // Empty dependency array - only run once
+
+  const handleOnboardingComplete = async () => {
+    console.log('🎉 Onboarding completed! Callback triggered');
+    console.log('📝 Setting showOnboarding to false');
+    
+    // Ensure the state update happens immediately
+    setShowOnboarding(false);
+    setIsCheckingOnboarding(false);
+    
+    // Force a re-check to ensure we're showing the main app
+    setTimeout(() => {
+      setShowOnboarding(false);
+      console.log('✅ Should now show main app');
+    }, 100);
+  };
+
+  const handleResetOnboarding = () => {
+    console.log('🔄 Resetting onboarding...');
+    setShowOnboarding(true);
+  };
 
   // Save audio URI to local storage
   const saveAudioUri = async (audioId: string, audioUri: string) => {
@@ -107,7 +186,22 @@ export default function App() {
           })
         );
 
-        setSavedSounds(sounds);
+        // Merge with existing sounds instead of replacing
+        setSavedSounds((prevSounds) => {
+          // Keep sounds from onboarding (those with "From onboarding" dateAdded)
+          const onboardingSounds = prevSounds.filter(s => s.dateAdded === "From onboarding");
+          console.log(`📋 Onboarding sounds to preserve: ${onboardingSounds.length}`, JSON.stringify(onboardingSounds, null, 2));
+          
+          // Filter out duplicates based on audioData/audioId
+          const newSounds = sounds.filter(s => 
+            !onboardingSounds.some(os => os.audioData === s.audioData)
+          );
+          console.log(`📋 New sounds from backend: ${newSounds.length}`, JSON.stringify(newSounds, null, 2));
+          
+          const merged = [...onboardingSounds, ...newSounds];
+          console.log(`📋 Total merged sounds: ${merged.length}`);
+          return merged;
+        });
       }
     } catch (error: any) {
       console.error('❌ Error fetching fingerprints:', error.message);
@@ -184,8 +278,10 @@ export default function App() {
   };
 
   const renderScreen = () => {
+    console.log('🖼️ renderScreen called, currentScreen:', currentScreen);
     switch (currentScreen) {
       case "home":
+        console.log('🖼️ Rendering HomeScreen component');
         return (
           <HomeScreen
             onTeachSound={() => setCurrentScreen("teach")}
@@ -215,7 +311,7 @@ export default function App() {
         return <EventHistoryScreen />;
 
       case "settings":
-        return <SettingsScreen />;
+        return <SettingsScreen onResetOnboarding={handleResetOnboarding} />;
 
       default:
         return (
@@ -226,6 +322,29 @@ export default function App() {
         );
     }
   };
+
+  // Show loading while checking onboarding status
+  if (isCheckingOnboarding) {
+    console.log('🔄 Rendering: Loading screen');
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safe}>
+          <View style={[styles.container, styles.loadingContainer]}>
+            <ActivityIndicator size="large" color="#6D5EF5" />
+          </View>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Show onboarding if not completed
+  if (showOnboarding) {
+    console.log('🔄 Rendering: Onboarding Flow');
+    return <OnboardingFlow onComplete={handleOnboardingComplete} />;
+  }
+
+  console.log('🔄 Rendering: Main App');
+  console.log('📱 Current screen:', currentScreen);
 
   return (
     <SafeAreaProvider>
@@ -247,6 +366,10 @@ export default function App() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0B0F" },
   container: { flex: 1, backgroundColor: "#0B0B0F" },
+  loadingContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
   body: {
     flex: 1,
     // leaves space so content doesn't go behind the BottomNav

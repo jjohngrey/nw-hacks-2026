@@ -18,7 +18,7 @@ Notifications.setNotificationHandler({
 });
 
 // Backend configuration
-const PRODUCTION_BACKEND = 'http://155.138.215.227:3000'; // Vultr production server
+const PRODUCTION_BACKEND = 'http://155.138.215.227:3000'; // Vultr production backend
 const USE_PRODUCTION = true; // Set to false for local development (only if you're running backend locally)
 
 const getBackendUrl = () => {

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Switch, Pressable, ScrollView } from 'react-native';
-import { Check, Shield, Eye, Cpu, FileCheck } from 'lucide-react-native';
+import { View, Text, StyleSheet, Switch, Pressable, ScrollView, Alert } from 'react-native';
+import { Check, Shield, Eye, Cpu, FileCheck, RefreshCw } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const COLORS = {
   bg: "#0B0B0F",
@@ -13,7 +14,11 @@ const COLORS = {
   primary: "#6D5EF5",
 };
 
-export default function SettingsScreen() {
+interface SettingsScreenProps {
+  onResetOnboarding?: () => void;
+}
+
+export default function SettingsScreen({ onResetOnboarding }: SettingsScreenProps = {}) {
   const [isListening, setIsListening] = useState(true);
   const [sensitivity, setSensitivity] = useState(70);
   const [notifications, setNotifications] = useState({
@@ -24,6 +29,32 @@ export default function SettingsScreen() {
 
   const toggleNotification = (key: keyof typeof notifications) => {
     setNotifications({ ...notifications, [key]: !notifications[key] });
+  };
+
+  const handleResetOnboarding = () => {
+    Alert.alert(
+      'Reset Onboarding',
+      'This will clear your onboarding settings and show the setup wizard again. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await AsyncStorage.removeItem('onboarding_data');
+              if (onResetOnboarding) {
+                onResetOnboarding();
+              } else {
+                Alert.alert('Success', 'Onboarding has been reset. Please restart the app.');
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Failed to reset onboarding');
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -95,6 +126,18 @@ export default function SettingsScreen() {
           </Pressable>
         ))}
       </View>
+
+      {/* Reset Onboarding */}
+      <Pressable
+        onPress={handleResetOnboarding}
+        style={({ pressed }) => [
+          styles.resetButton,
+          { opacity: pressed ? 0.7 : 1 },
+        ]}
+      >
+        <RefreshCw size={20} color={COLORS.primary} />
+        <Text style={styles.resetButtonText}>Reset onboarding</Text>
+      </Pressable>
 
       {/* Privacy Section */}
       <Text style={styles.sectionTitle}>Privacy</Text>
@@ -234,5 +277,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: COLORS.textPrimary,
+  },
+  resetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.card,
+    borderRadius: 16,
+    paddingVertical: 14,
+    marginBottom: 24,
+    gap: 8,
+  },
+  resetButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.primary,
   },
 });

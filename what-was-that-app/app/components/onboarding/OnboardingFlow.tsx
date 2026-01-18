@@ -1,0 +1,225 @@
+import React, { useState, useEffect } from "react";
+import { View, Text, StyleSheet, Pressable } from "react-native";
+import { ArrowLeft } from "lucide-react-native";
+import {
+  OnboardingData,
+  defaultOnboardingData,
+} from "../../../types/onboarding";
+import { saveOnboardingData } from "../../../utils/onboarding-storage";
+
+import WelcomeStep from "./WelcomeStep";
+import PairSensorStep from "./PairSensorStep";
+import ChooseSoundTypesStep from "./ChooseSoundTypesStep";
+import AlertDeliveryStep from "./AlertDeliveryStep";
+import EmergencyContactStep from "./EmergencyContactStep";
+import CompletionStep from "./CompletionStep";
+
+interface OnboardingFlowProps {
+  onComplete: () => void;
+}
+
+export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
+  const [currentStep, setCurrentStep] = useState(0);
+  const [onboardingData, setOnboardingData] = useState<OnboardingData>(
+    defaultOnboardingData
+  );
+
+  useEffect(() => {
+    console.log('📱 OnboardingFlow mounted, current step:', currentStep);
+  }, []);
+
+  useEffect(() => {
+    console.log('📍 Step changed to:', currentStep);
+  }, [currentStep]);
+
+  // Total steps: 0=Welcome, 1=Pair, 2=Sounds, 3=Delivery, 4=Contact, 5=Complete
+  const totalSteps = 6;
+
+  const handleBack = () => {
+    console.log('⬅️ Back pressed, current step:', currentStep);
+    if (currentStep > 0) {
+      setCurrentStep(currentStep - 1);
+    }
+  };
+
+  const handleSkipAll = async () => {
+    console.log('⏩ Skip all pressed - saving defaults');
+    // Save defaults and mark complete
+    const completeData = { ...defaultOnboardingData, onboardingComplete: true };
+    await saveOnboardingData(completeData);
+    console.log('✅ Data saved, calling onComplete callback');
+    onComplete();
+  };
+
+  const handleNext = async () => {
+    console.log('➡️ Next pressed, current step:', currentStep);
+    const nextStep = currentStep + 1;
+    if (nextStep >= totalSteps) {
+      // Final step - mark complete and save
+      console.log('🎉 Final step reached - marking onboarding complete');
+      const completeData = { ...onboardingData, onboardingComplete: true };
+      await saveOnboardingData(completeData);
+      console.log('✅ Data saved, calling onComplete callback');
+      onComplete();
+    } else {
+      console.log('📍 Moving to step:', nextStep);
+      setCurrentStep(nextStep);
+    }
+  };
+
+  const handleSensorPaired = (paired: boolean) => {
+    setOnboardingData({ ...onboardingData, sensorPaired: paired });
+  };
+
+  const handleSoundTypesChange = (
+    soundTypes: OnboardingData["soundTypes"]
+  ) => {
+    setOnboardingData({ ...onboardingData, soundTypes });
+  };
+
+  const handleCustomSoundsChange = (customSounds: OnboardingData["customSounds"]) => {
+    setOnboardingData({ ...onboardingData, customSounds });
+  };
+
+  const handleDeliveryChange = (delivery: OnboardingData["delivery"]) => {
+    setOnboardingData({ ...onboardingData, delivery });
+  };
+
+  const handleEmergencyContactChange = (
+    emergencyContact: OnboardingData["emergencyContact"]
+  ) => {
+    setOnboardingData({ ...onboardingData, emergencyContact });
+  };
+
+  const renderProgressIndicator = () => {
+    // Don't show on welcome or completion screens
+    if (currentStep === 0 || currentStep === totalSteps - 1) {
+      return null;
+    }
+
+    // Steps 1-4 (index 1-4)
+    const progressSteps = [1, 2, 3, 4];
+    const activeProgressStep = currentStep;
+
+    return (
+      <View style={styles.progressContainer}>
+        {progressSteps.map((step) => (
+          <View
+            key={step}
+            style={[
+              styles.progressDot,
+              step <= activeProgressStep && styles.progressDotActive,
+            ]}
+          />
+        ))}
+      </View>
+    );
+  };
+
+  const renderStep = () => {
+    console.log('🎬 Rendering step:', currentStep);
+    const stepProps = {
+      onNext: handleNext,
+      onBack: handleBack,
+      showBack: currentStep > 0 && currentStep < 5, // Show back button except on welcome and completion
+    };
+    
+    switch (currentStep) {
+      case 0:
+        console.log('🎬 Returning WelcomeStep component');
+        return <WelcomeStep onNext={handleNext} onSkip={handleSkipAll} />;
+      case 1:
+        return (
+          <PairSensorStep
+            {...stepProps}
+            onSensorPaired={handleSensorPaired}
+          />
+        );
+      case 2:
+        return (
+          <ChooseSoundTypesStep
+            {...stepProps}
+            soundTypes={onboardingData.soundTypes}
+            onSoundTypesChange={handleSoundTypesChange}
+            customSounds={onboardingData.customSounds}
+            onCustomSoundsChange={handleCustomSoundsChange}
+          />
+        );
+      case 3:
+        return (
+          <AlertDeliveryStep
+            {...stepProps}
+            delivery={onboardingData.delivery}
+            onDeliveryChange={handleDeliveryChange}
+          />
+        );
+      case 4:
+        return (
+          <EmergencyContactStep
+            {...stepProps}
+            emergencyContact={onboardingData.emergencyContact}
+            onEmergencyContactChange={handleEmergencyContactChange}
+          />
+        );
+      case 5:
+        return <CompletionStep onFinish={handleNext} />;
+      default:
+        return <WelcomeStep onNext={handleNext} onSkip={handleSkipAll} />;
+    }
+  };
+
+  const step = renderStep();
+  console.log('🎨 Step component:', step ? 'exists' : 'null');
+  
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0B0B0F' }}>
+      {/* Back button - show on steps 1-4 */}
+      {currentStep > 0 && currentStep < 5 && (
+        <Pressable 
+          onPress={handleBack}
+          style={styles.backButton}
+          hitSlop={10}
+        >
+          <ArrowLeft size={24} color="#fff" />
+        </Pressable>
+      )}
+      
+      {renderProgressIndicator()}
+      <View style={{ flex: 1, backgroundColor: '#0B0B0F' }}>
+        {step}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: "#0B0B0F" },
+  container: { flex: 1, backgroundColor: "#0B0B0F" },
+  backButton: {
+    position: 'absolute',
+    top: 50,
+    left: 24,
+    zIndex: 100,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+  },
+  progressContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 20,
+    gap: 8,
+  },
+  progressDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#2A2A35",
+  },
+  progressDotActive: {
+    backgroundColor: "#6D5EF5",
+    width: 24,
+  },
+});
+
